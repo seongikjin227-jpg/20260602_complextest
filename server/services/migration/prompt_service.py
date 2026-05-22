@@ -7,7 +7,7 @@ PROMPTS_DIR = Path(__file__).resolve().parent.parent.parent / "config" / "prompt
 
 
 def _load(filename: str) -> dict:
-    return json.loads((PROMPTS_DIR / filename).read_text(encoding="utf-8"))
+    return json.loads((PROMPTS_DIR / filename).read_text(encoding="utf-8-sig"))
 
 
 def build_migration_prompt(

@@ -11,7 +11,7 @@ PROMPTS_DIR = Path(__file__).resolve().parent.parent.parent / "config" / "prompt
 
 def load_prompt_template(filename: str) -> dict[str, Any]:
     prompt_path = PROMPTS_DIR / filename
-    return json.loads(prompt_path.read_text(encoding="utf-8"))
+    return json.loads(prompt_path.read_text(encoding="utf-8-sig"))
 
 
 def render_prompt_template(filename: str, **kwargs) -> dict[str, Any]:

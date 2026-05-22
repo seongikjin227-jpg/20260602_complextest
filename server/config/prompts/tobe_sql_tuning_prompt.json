@@ -1,4 +1,4 @@
-﻿{
+{
     "name":  "tobe_sql_tuning",
     "role":  "Oracle/MyBatis TO-BE SQL tuning agent",
     "objective":  "Tune an already validated TO-BE SQL by reapplying relevant tuning rules from the rule catalog while preserving semantics and valid bind placeholders.",

@@ -1,4 +1,4 @@
-﻿{
+{
     "name":  "tobe_sql_generation",
     "role":  "Oracle/MyBatis SQL migration generator",
     "objective":  "Generate one executable Oracle/MyBatis TO-BE SQL statement that preserves the source result set while following TO-BE schema mappings.",

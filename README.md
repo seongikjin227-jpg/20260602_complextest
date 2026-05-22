@@ -1,235 +1,379 @@
-# [TEST VERSION] 이 문서는 완성본이 아니라 테스트 실행과 검증을 위한 현재 개발 버전 설명입니다.
+# onlysqlconv
 
-# Supervisor Multi-Agent Pipeline
+Oracle/MyBatis SQL 변환, 바인드 값 추출, row count 검증, TO-BE SQL 튜닝을 자동화하는 Supervisor 기반 멀티 에이전트 파이프라인입니다.
 
-Oracle 데이터 이관, MyBatis SQL 변환, SQL 튜닝을 하나의 파이프라인으로 자동화하는 멀티 에이전트 시스템입니다.  
-**Supervisor Agent**가 DB 대기열을 주기적으로 폴링하고, 3개의 전문 에이전트를 고정 배치 크기로 실행합니다.
-
-> 현재 버전은 운영 안정화 전 테스트용입니다. 상태 전이, 재시도 정책, Agent 간 연계 방식은 테스트 결과에 따라 변경될 수 있습니다.
-
----
+현재 버전은 개발/테스트용입니다. 프롬프트와 검증 방식은 실행 결과에 따라 계속 조정될 수 있습니다.
 
 ## 전체 구조
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      Supervisor Agent                           │
-│        (Deterministic Batch · LangGraph 상태 머신)               │
-│                                                                 │
-│   DB 폴링 → 최대 20건씩 Tool 실행 → 5초 대기 → 반복              │
-└──────────────┬──────────────┬──────────────┬────────────────────┘
-               │              │              │
-               ▼              ▼              ▼
-     ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-     │  Mig Agent   │ │  SQL Agent   │ │ Tuning Agent │
-     │ 데이터 이관  │ │  SQL 변환    │ │  SQL 튜닝    │
-     └──────┬───────┘ └──────┬───────┘ └──────┬───────┘
-            │                │                │
-            ▼                ▼                ▼
-     NEXT_MIG_INFO    NEXT_SQL_INFO    NEXT_SQL_INFO
-     (USE_YN='Y')     (STATUS 기준)   (TUNED_TEST 기준)
+```text
+main.py
+  -> Supervisor Agent
+      -> Migration Agent
+      -> SQL Conversion Agent
+      -> SQL Tuning Agent
 ```
 
----
+Supervisor는 DB 대기열을 polling하고, 각 에이전트에 작업을 dispatch합니다.
 
-## Supervisor Agent
+- Migration Agent: `NEXT_MIG_INFO` 기반 데이터 이관 SQL 생성/실행/검증
+- SQL Conversion Agent: MyBatis 원본 SQL을 Oracle TO-BE SQL로 변환하고 row count 검증
+- SQL Tuning Agent: 검증을 통과한 TO-BE SQL을 튜닝 규칙/RAG 기반으로 개선하고 재검증
 
-> **역할**: DB의 대기 작업을 주기적으로 폴링하고, 각 에이전트별로 최대 20건씩 바로 실행합니다.
+## 실행 흐름
 
-### 동작 방식
+### 1. Migration Agent
 
-Supervisor는 작업 대상 선정을 LLM에 맡기지 않습니다. DB polling 결과를 기준으로 **Data Migration, SQL Conversion, SQL Tuning을 각각 최대 20건씩** 실행합니다. 에이전트 프로세스는 종료 신호를 받기 전까지 계속 돌며, 처리할 작업이 없는 loop에서도 5초 대기 후 다시 polling합니다.
+1. `NEXT_MIG_INFO`에서 이관 대상 작업 조회
+2. 소스/타겟 DDL 및 매핑 정보 조회
+3. LLM으로 migration SQL 생성
+4. Oracle에서 SQL 실행
+5. row count 검증
+6. 성공 시 `NEXT_SQL_INFO` 작업 생성
 
+### 2. SQL Conversion Agent
+
+1. `NEXT_SQL_INFO`에서 변환 대상 SQL 조회
+2. `from_sql` 기준으로 TO-BE SQL 생성
+3. 원본 SQL에서 bind parameter 추출
+4. bind 후보 SQL 생성
+5. bind SQL 실행 결과로 최대 3개 bind case 구성
+6. source SQL과 target SQL을 count subquery로 감싸 검증 SQL 생성
+7. 검증 SQL 실행 후 `PASS`/`FAIL` 판단
+8. 성공 시 `TUNED_TEST=READY`로 튜닝 대상화
+
+### 3. SQL Tuning Agent
+
+1. `TUNED_TEST != PASS`인 TO-BE SQL 조회
+2. universal tuning rules와 RAG 검색 결과를 프롬프트에 주입
+3. LLM으로 tuned SQL 생성
+4. 기존 TO-BE SQL과 tuned SQL row count 비교
+5. `TUNED_SQL`, `TUNED_TEST` 저장
+
+## Bind SQL 단계 최신 동작
+
+Bind SQL 단계는 실제 테스트에 사용할 bind 값 조합을 DB에서 추출하는 단계입니다.
+
+현재 기준은 다음과 같습니다.
+
+- bind parameter와 후보 컬럼은 `from_sql` 기준으로 판단합니다.
+- `bind_sql_prompt.json`에는 `tobe_sql`과 `mapping_schema_text`를 전달하지 않습니다.
+- `from_sql`에 없는 테이블, 컬럼, 조인, SELECT list를 외부 매핑 정보 기준으로 추론하거나 재구성하지 않습니다.
+- 최상위 SELECT는 `SELECT DISTINCT <컬럼> AS "<bind_param>" ...` 형태를 우선합니다.
+- 복잡한 조인과 필터는 내부 row source에서 처리하고, 최상위 SELECT는 bind parameter alias 반환에 집중합니다.
+- `SYSDATE`, `CURRENT_DATE`, `SYSTIMESTAMP`처럼 실행 시점에 의존하는 조건은 bind 후보 추출 과정에서 제거합니다.
+- `SELECT DISTINCT`와 `ORDER BY`를 함께 쓸 경우 Oracle 제약상 ORDER BY 컬럼이 SELECT list에 그대로 있어야 하므로, bind SQL에서는 가능하면 ORDER BY를 제거합니다.
+- 생성된 bind SQL에는 MyBatis XML 태그나 placeholder가 남으면 안 됩니다.
+
+### Bind SQL 입력
+
+`bind_sql_prompt.json`에 전달되는 입력은 다음뿐입니다.
+
+- `from_sql`: 실제 bind 후보 row를 뽑을 기준 SQL
+- `bind_param_metadata_json`: 추출해야 할 bind parameter 목록과 조건부 그룹 정보
+- `bind_target_hints_json`: `param -> 후보 컬럼` 힌트
+- `last_error`: 이전 실행 오류
+
+`mapping_schema_text`와 `tobe_sql`은 bind prompt에 노출하지 않습니다.
+
+## Bind 단계의 MyBatis 동적 태그 처리
+
+Bind 단계에서 MyBatis 동적 태그는 크게 두 곳에서 처리됩니다.
+
+### 1. bind metadata 생성
+
+파일: `server/services/sql/binding_service.py`
+
+`build_bind_param_metadata(sql_text)`는 SQL 안의 placeholder와 조건부 태그를 분석합니다.
+
+처리 대상:
+
+- `#{param}`
+- `${param}`
+- `<if test="...">...</if>`
+- `<when test="...">...</when>`
+- `<otherwise>...</otherwise>`
+
+반환 구조:
+
+```json
+{
+  "required_bind_params": ["id"],
+  "conditional_bind_params": [
+    {
+      "tag": "if",
+      "test": "name != null",
+      "params": ["name"]
+    }
+  ],
+  "all_bind_params": ["id", "name"]
+}
 ```
-1. Poll   — NEXT_MIG_INFO, NEXT_SQL_INFO 전체 대기 작업 목록 조회
-2. Select — 각 에이전트별 대기 작업 중 최대 20건을 실행 대상으로 등록
-3. Call   — run_data_migration / run_sql_conversion / run_sql_tuning 실행
-4. Wait   — cycle 집계 저장 후 5초 대기
-5. Loop   — 종료 신호가 없으면 1로 돌아감
+
+의미:
+
+- `all_bind_params`: 최종 bind SQL이 SELECT alias로 반환해야 하는 전체 파라미터
+- `required_bind_params`: 조건부 태그 바깥에서 사용되는 필수 파라미터
+- `conditional_bind_params`: `<if>`/`<when>`/`<otherwise>` 내부에서만 쓰이는 조건부 파라미터 그룹
+
+현재 `generate_bind_sql()`은 `job.source_sql` 기준으로 metadata를 먼저 만들고, source SQL에 bind가 전혀 없을 때만 TO-BE SQL로 fallback합니다.
+
+### 2. bind set 구성 시 조건부 분기 커버
+
+파일: `server/services/sql/binding_service.py`
+
+`build_bind_sets(tobe_sql, source_sql, bind_query_rows, max_cases=3)`는 bind SQL 실행 결과 row를 최대 3개 bind case로 줄입니다.
+
+동작 방식:
+
+1. parameter 이름은 `source_sql`에서 먼저 추출합니다.
+2. 없으면 `tobe_sql`에서 fallback 추출합니다.
+3. `<if>`/`<when>` test expression에서 조건 제어 파라미터를 추출합니다.
+4. 각 bind row에 대해 조건부 그룹이 활성/비활성인지 signature를 계산합니다.
+5. 가능한 한 서로 다른 조건부 분기 패턴을 대표하는 bind case를 먼저 선택합니다.
+6. 부족하면 중복되지 않는 값 조합을 추가합니다.
+7. 그래도 없으면 모든 parameter가 `None`인 fallback case를 만듭니다.
+
+주의점:
+
+- Bind SQL 자체가 MyBatis 태그를 실행하는 것은 아닙니다.
+- Bind SQL 생성 프롬프트는 조건부 parameter를 활성화할 수 있는 실제 row가 있으면 값을 반환하고, 조건을 평가할 수 없으면 해당 블록을 비활성으로 간주하도록 지시합니다.
+- 최종 검증 SQL 단계에서 `bind_set_json`을 기준으로 MyBatis 동적 태그를 실제 SQL로 materialize합니다.
+
+## Test SQL 단계 최신 동작
+
+Test SQL 단계는 이미 만들어진 source SQL과 target SQL을 비교하는 역할만 합니다.
+
+현재 기준:
+
+- `test_sql_prompt.json`에는 `mapping_schema_text`를 전달하지 않습니다.
+- source SQL과 target SQL은 이미 비교 대상 SQL이므로 재작성하지 않습니다.
+- 각 SQL은 가능한 한 원본 형태를 유지하고 `SELECT COUNT(*) FROM (<sql>)` 형태로 감싸 비교합니다.
+- 수행 작업은 bind 값 치환, MyBatis 동적 태그 해석, ORDER BY 제거로 제한합니다.
+- 스키마 판단은 `source_schema`, `target_schema`만 사용합니다.
+- 매핑룰 기반으로 컬럼, 테이블, 조인, SELECT list를 재구성하지 않습니다.
+- 반환 SQL은 `CASE_NO`, `FROM_COUNT`, `TO_COUNT` 세 컬럼만 출력합니다.
+- bind case는 최대 3개만 사용합니다.
+
+## Prompt 구성
+
+프롬프트 파일 위치:
+
+```text
+server/config/prompts/
+  bind_sql_prompt.json
+  test_sql_prompt.json
+  tobe_sql_prompt.json
+  tobe_sql_tuning_prompt.json
+  migration_prompt.json
+  planner_prompt.json
 ```
 
-### 오케스트레이션 규칙
+프롬프트 렌더링 파일:
 
-| 규칙 | 내용 |
-|------|------|
-| 재시도 제한 | `RETRY >= 3`인 Migration 작업은 건너뜀 |
-| 우선순위 | DB Migration은 `PRIORITY` 오름차순, SQL Migration은 `STATUS` 우선순위 기준으로 처리 |
-| 배치 크기 | 한 batch loop에서 Data Migration, SQL Conversion, SQL Tuning을 각각 최대 20건 실행 |
-| 독립 실행 | SQL Agent는 Migration 완료 여부와 무관하게 독립 실행 |
-| 계속 실행 | 처리할 작업이 없어도 종료하지 않고 5초 후 다시 polling |
+```text
+server/services/sql/prompt_service.py
+server/services/migration/prompt_service.py
+```
 
-### 사용 가능한 Tools
+프롬프트 JSON은 `utf-8-sig`로 읽습니다. 따라서 UTF-8 BOM이 있는 JSON과 BOM이 없는 JSON 모두 로드할 수 있습니다.
+
+## 주요 서비스 파일
+
+```text
+server/services/sql/agents.py
+  SQL Conversion Agent와 Tuning Agent 실행 흐름
+
+server/services/sql/llm_service.py
+  TO-BE SQL, bind SQL, test SQL, tuned SQL 생성을 위한 LLM 호출 wrapper
+
+server/services/sql/binding_service.py
+  bind parameter 추출, 조건부 bind metadata 생성, bind set 구성
+
+server/services/sql/mybatis_materializer_service.py
+  MyBatis 동적 SQL을 bind case 기준 실행 SQL로 materialize
+
+server/services/sql/validation_service.py
+  bind SQL/test SQL 실행 및 검증 결과 판단
+
+server/services/sql/tobe_sql_tuning_service.py
+  tuning rule 로딩, FAISS/RAG 검색, tuning context 생성
+
+server/services/sql/xml_parser_service.py
+  MyBatis mapper XML 파싱 및 NEXT_SQL_INFO 적재 보조
+```
+
+## MyBatis XML Parser
+
+MyBatis mapper XML을 `NEXT_SQL_INFO`로 적재하기 위한 보조 서비스입니다.
+
+```bash
+python -m server.services.sql.xml_parser_service all
+python -m server.services.sql.xml_parser_service stage1 --source-dir C:\path\to\mapper --output-dir C:\path\to\xml-json
+python -m server.services.sql.xml_parser_service stage2 --output-dir C:\path\to\xml-json
+python -m server.services.sql.xml_parser_service stage3
+python -m server.services.sql.xml_parser_service stage4
+```
+
+환경 변수:
+
+```env
+MAPPER_XML_SOURCE_DIR=C:\path\to\mapper-xml
+XML_PARSER_DATA_DIR=server/services/sql/DATA
+ACTIVE_SQL_ID_TABLE=
+ACTIVE_SQL_ID_COLUMN=SQL_ID
+```
+
+## MyBatis Materializer
+
+파일: `server/services/sql/mybatis_materializer_service.py`
+
+`materialize_sql(sql_text, bind_case)`는 MyBatis 동적 SQL을 특정 bind case 기준의 실행 가능한 SQL 문자열로 변환합니다.
+
+지원 대상:
+
+- `<if>`
+- `<choose>` / `<when>` / `<otherwise>`
+- `<where>`
+- `<trim>`
+- `<foreach>`
+- `#{param}` / `${param}`
+
+예시:
 
 ```python
-run_data_migration(map_id: str)        # Mig Agent 실행
-run_sql_conversion(row_id: str)        # SQL Agent 실행
-run_sql_tuning(row_ids: list[str])     # Tuning Agent 실행
+from server.services.sql.mybatis_materializer_service import materialize_sql
+
+sql = """
+SELECT *
+FROM USERS
+<where>
+  <if test="userId != null">AND USER_ID = #{userId}</if>
+</where>
+"""
+
+print(materialize_sql(sql, {"userId": 100}))
 ```
 
----
+## 환경 변수
 
-## Mig Agent (데이터 이관)
+`.env.example`을 복사해 `.env`를 만들고 실행 환경에 맞게 채웁니다.
 
-> **역할**: `NEXT_MIG_INFO` 테이블의 대기 작업을 처리해 Oracle 간 데이터를 이관합니다.
-
-### 처리 흐름
-
-```
-NEXT_MIG_INFO (USE_YN='Y', TARGET_YN IS NOT NULL)
-        │
-        ▼
-1. Fetch DDL      — 소스·타겟 테이블 스키마 조회
-        │
-        ▼
-2. Check Deps     — 선행 작업 완료 여부 확인
-        │
-        ▼
-3. Generate SQL   — LLM이 매핑 규칙 기반으로 이관 SQL 생성
-        │
-        ▼
-4. Execute SQL    — Oracle에서 이관 SQL 실행
-        │
-        ▼
-5. Verify         — 소스·타겟 row count 비교 검증
-        │
-        ▼
-NEXT_SQL_INFO 생성 (STATUS=READY) → SQL Agent로 인계
+```powershell
+Copy-Item .env.example .env
 ```
 
-### 핵심 동작
+주요 항목:
 
-- **재시도**: 실패 시 LLM에 오류 피드백 후 재생성, 최대 3회
-- **카운터**: 처리 시마다 `BATCH_CNT` 증가
-- **결과 상태**: `STATUS` 컬럼에 `PASS` / `FAIL` / `SKIP` 저장
-- **연쇄**: 이관 성공 후 `NEXT_SQL_INFO`에 `STATUS='READY'` 행 자동 생성
+```env
+DB_USER=
+DB_PASS=
+DB_HOST=localhost
+DB_PORT=1521
+DB_SID=xe
+ORACLE_CLIENT_PATH=
+ORACLE_SCHEMA=
+ORACLE_SCHEMA_SRC=
+ORACLE_SCHEMA_TGT=
 
----
+MAPPING_RULE_TABLE=NEXT_MIG_INFO
+MAPPING_RULE_DETAIL_TABLE=NEXT_MIG_INFO_DTL
+RESULT_TABLE=NEXT_SQL_INFO
 
-## SQL Agent (SQL 변환)
+LLM_PROVIDER=openai
+LLM_API_KEY=
+LLM_MODEL=gpt-4o-mini
+LLM_BASE_URL=
+LLM_MAX_TOKENS=4096
 
-> **역할**: 레거시 MyBatis SQL을 Oracle 호환 TO-BE SQL로 변환하고 row count 검증을 수행합니다.
+RAG_EMBED_BASE_URL=
+RAG_EMBED_API_KEY=
+RAG_EMBED_MODEL=BAAI/bge-m3
+RAG_EMBED_TIMEOUT_SEC=30
+TOBE_RULE_CATALOG_PATH=server/services/sql/data/rag/tobe_rule_catalog.json
+UNIVERSAL_TUNING_RULES_PATH=server/services/sql/data/rules/universal_tuning_rules.json
+TOBE_SQL_TUNING_TOP_K=3
+TOBE_SQL_TUNING_MAX_ITERATIONS=1
 
-### 처리 흐름
+MAPPER_XML_SOURCE_DIR=
+XML_PARSER_DATA_DIR=server/services/sql/DATA
+ACTIVE_SQL_ID_TABLE=
+ACTIVE_SQL_ID_COLUMN=SQL_ID
 
-```
-NEXT_SQL_INFO (STATUS: URGENT / READY / FAIL / SKIP / PENDING / NULL)
-        │
-        ▼
-1. Generate TO-BE SQL  — LLM이 FR_SQL_TEXT 또는 EDIT_FR_SQL 기반으로 변환
-        │
-        ▼
-2. Extract Bind Params — SQL 내 바인드 파라미터(:param) 추출
-        │
-        ▼
-3. Generate Bind SQL   — 실제 바인드 값을 가져올 쿼리 생성
-        │
-        ▼
-4. Build Bind Sets     — 대표 테스트 케이스 3개 수집
-        │
-        ▼
-5. Generate Test SQL   — 바인드 셋을 적용한 검증 쿼리 생성
-        │
-        ▼
-6. Execute & Validate  — 원본 SQL vs TO-BE SQL row count 비교
-        │
-        ▼
-STATUS=PASS, TUNED_TEST=READY → Tuning Agent로 인계
-```
-
-### 핵심 동작
-
-- **RAG 미사용**: 기본 변환만 수행 (튜닝 룰 적용 없음)
-- **결과 컬럼**: `TO_SQL_TEXT`, `STATUS`, `TUNED_TEST`, `BIND_SQL`, `BIND_SET`, `TEST_SQL`
-- **스키마 정책**: `TO_SQL_TEXT`의 실제 타겟 테이블은 `ORACLE_SCHEMA_TGT` 또는 매핑 룰의 `TO_TABLE` 스키마를 포함한 `SCHEMA.TABLE` 형식으로 생성
-- **검증 기준**: LLM이 생성한 `TEST_SQL`로 원본 SQL과 TO-BE SQL의 row count 일치 여부를 확인. 검증 SQL 생성 시 `ORACLE_SCHEMA_SRC`, `ORACLE_SCHEMA_TGT`, 매핑 룰의 `FR_TABLE`/`TO_TABLE` 스키마 정보를 함께 사용
-- **매핑 룰 스키마 보강**: DB의 `NEXT_MIG_INFO.FR_TABLE`, `NEXT_MIG_INFO.TO_TABLE`에는 테이블명만 저장될 수 있습니다. 프롬프트에 전달하는 `mapping_schema_text`는 `.env`의 `ORACLE_SCHEMA_SRC`, `ORACLE_SCHEMA_TGT`를 사용해 `FR_TABLE=SRC_SCHEMA.TABLE`, `TO_TABLE=TGT_SCHEMA.TABLE` 형태로 보강합니다.
-- **독립 실행**: Migration 결과와 무관하게 `NEXT_SQL_INFO` 상태만 보고 실행
-- **대상 상태**: `URGENT`, `READY`, `FAIL`, `SKIP`, `PENDING`, `NULL` 상태를 polling 대상에 포함
-- **선정 우선순위**: `URGENT` → `READY` → `FAIL` → `SKIP` → `PENDING` → `NULL`
-- **긴급 디버깅**: 특정 SQL 변환 job을 먼저 실행하고 싶으면 `NEXT_SQL_INFO.STATUS='URGENT'`로 지정
-- **재시도 제한**: `BATCH_CNT < 30` 조건을 만족하는 작업만 polling 대상에 포함
-
----
-
-## Tuning Agent (SQL 튜닝)
-
-> **역할**: RAG(검색 증강 생성)로 관련 튜닝 룰을 조회해 TO-BE SQL의 성능을 최적화합니다.
-
-### 처리 흐름
-
-```
-NEXT_SQL_INFO (TUNED_TEST: PASS 제외, BATCH_CNT < 30)
-        │
-        ▼
-1. Retrieve Rules  — FAISS 임베딩으로 tobe_rule_catalog에서 관련 룰 Top-K 조회
-        │
-        ▼
-2. Tune SQL        — LLM이 룰을 적용해 TO_SQL_TEXT → 튜닝 SQL 생성
-        │
-        ▼
-3. Generate Test   — 튜닝 SQL 검증용 쿼리 생성
-        │
-        ▼
-4. Execute & Validate — TO_SQL_TEXT vs TUNED_SQL row count 비교
-        │
-        ▼
-TUNED_SQL 저장, TUNED_TEST = PASS / FAIL
+PLANNER_ENABLED=true
+PLANNER_MAX_MIG_PER_CYCLE=5
+SUPERVISOR_RECURSION_LIMIT=10000
+MIG_KIND=DB_MIG
 ```
 
-### 핵심 동작
+## 설치 및 실행
 
-- **범용 룰**: `NEXT_SQL_RULES.RULE_TYPE='GENERAL'` 룰을 프롬프트에 항상 직접 삽입
-- **검색 룰**: `NEXT_SQL_RULES.RULE_TYPE='SEARCH'` 룰만 FAISS/토큰 검색 대상으로 사용하고 Top-K만 프롬프트에 삽입
-- **RAG 엔진**: FAISS CPU 인덱스 + `BAAI/bge-m3` 임베딩 모델
-- **멀티 이터레이션**: `TOBE_SQL_TUNING_MAX_ITERATIONS >= 2`이면 직전 튜닝 결과를 다음 반복 입력으로 사용
-- **재시도 기준**: `BATCH_CNT < 30`인 `FAIL` 작업은 다음 사이클에서 재시도
-- **튜닝 대상 기준**: `STATUS='PASS'`, `TO_SQL_TEXT IS NOT NULL`, `TUNED_TEST!='PASS'`인 작업을 대상으로 함. `TUNED_TEST`가 `READY`, `FAIL`, `NULL`, 기타 미완료 값이어도 재시도 대상에 포함
-- **튜닝 전제**: 입력 `TO_SQL_TEXT`는 이미 SQL Agent 검증을 통과한 SQL로 간주하며, 튜닝 과정에서는 기존 테이블 참조와 스키마 표기를 보존
-- **배치 실행**: Supervisor가 한 batch loop에서 최대 20건까지 dispatch
-- **결과 컬럼**: `TUNED_SQL`, `TUNED_TEST`, `BLOCK_RAG_CONTENT`
-- **실패 SQL 보존**: 튜닝 검증 중 예외가 발생해 `TUNED_TEST='FAIL'`이 되더라도, 그 전에 생성된 `TUNED_SQL`이 있으면 함께 저장
-- **에러 로그 정책**: 튜닝 예외 발생 시 `LOG`에는 최신 `[TUNING_ERROR] ...` 하나만 저장하고 이전 튜닝 에러 로그는 누적하지 않음
+### 1. 의존성 설치
 
----
-
-## DB 상태 흐름
-
-```
-NEXT_MIG_INFO                       NEXT_SQL_INFO
-─────────────                       ─────────────
-USE_YN='Y'                           (Mig Agent가 생성)
-   │                                STATUS=READY
-   │  Mig Agent                        │
-   ▼                                   │  SQL Agent
-STATUS=PASS  ─────────────────────►    ▼
-                                    STATUS=PASS
-                                    TUNED_TEST=READY
-                                       │
-                                       │  Tuning Agent
-                                       ▼
-                                    TUNED_TEST=PASS
-                                    TUNED_SQL 저장
+```bash
+pip install -r requirements.txt
 ```
 
-### 주요 컬럼
+### 2. 사전 점검
 
-| 컬럼 | 관리 에이전트 | 설명 |
-|------|-------------|------|
-| `STATUS` | SQL Agent | TO-BE SQL 검증 결과 및 실행 대상 상태 (`URGENT` / `READY` / `PASS` / `FAIL` / `SKIP` / `PENDING`) |
-| `TO_SQL_TEXT` | SQL Agent | 변환된 TO-BE SQL |
-| `BIND_SQL` | SQL Agent | 바인드 값 추출 SQL |
-| `BIND_SET` | SQL Agent | 테스트용 바인드 값 JSON |
-| `TEST_SQL` | SQL Agent | 원본 SQL과 TO-BE SQL의 row count 비교용 검증 SQL |
-| `TUNED_SQL` | Tuning Agent | 최종 튜닝 SQL |
-| `TUNED_TEST` | Tuning Agent | 튜닝 상태 (`READY` / `PASS` / `FAIL`) |
-| `BLOCK_RAG_CONTENT` | Tuning Agent | 프롬프트에 사용된 RAG 룰 JSON |
-| `BATCH_CNT` | SQL·Tuning Agent | 처리 횟수 (30 초과 시 재시도 중단) |
+```bash
+python scripts/init_db.py
+```
 
----
+### 3. 에이전트 실행
 
-## Agent 실행 시간 집계
+```bash
+python main.py
+```
 
-Supervisor는 한 batch loop에서 실제 처리한 작업이 있을 때 `AG_AGENT_RUN_METRICS`에 실행 시간을 집계해 저장합니다. `BATCH_NO`는 Supervisor 프로세스 실행 1회를 묶는 번호이고, `CYCLE_NO`는 해당 batch 안에서 DB polling이 실행된 순번입니다. `SUPERVISOR_CYCLE`은 poll과 tool 실행 시간을 포함하며 다음 poll까지의 5초 대기 시간은 제외합니다. `DB_MIGRATION`, `SQL_MIGRATION`, `SQL_TUNING`은 각 에이전트 tool이 처리한 job 수와 총 소요 시간을 기록합니다.
+### 4. Streamlit 대시보드 실행
+
+```bash
+streamlit run app/app.py
+```
+
+## Streamlit 대시보드
+
+```text
+app/app.py
+app/pages/dashboard.py
+app/pages/mig_monitor.py
+app/pages/sql_monitor.py
+app/pages/tuning_monitor.py
+app/pages/job_detail.py
+app/pages/rag_manager_page.py
+app/pages/system_health.py
+app/pages/settings_page.py
+```
+
+기능:
+
+- 전체 작업 현황 조회
+- Migration/SQL/Tuning Agent 모니터링
+- 개별 job 상세 조회
+- RAG rule 관리
+- DB/LLM/system health 확인
+- agent process start/pause/resume/stop 제어
+
+## DB 상태 컬럼
+
+주요 컬럼:
+
+| 컬럼 | 설명 |
+| --- | --- |
+| `STATUS` | SQL Conversion 상태. `URGENT`, `READY`, `PASS`, `FAIL`, `SKIP`, `PENDING` 등을 사용 |
+| `TO_SQL_TEXT` | 생성된 TO-BE SQL |
+| `BIND_SQL` | bind 후보 값을 추출하기 위해 생성된 SQL |
+| `BIND_SET` | 검증에 사용할 bind case JSON |
+| `TEST_SQL` | source SQL과 target SQL count 비교 SQL |
+| `TUNED_SQL` | 튜닝된 SQL |
+| `TUNED_TEST` | 튜닝 검증 상태. `READY`, `PASS`, `FAIL` 등 |
+| `BLOCK_RAG_CONTENT` | 튜닝 프롬프트에 사용된 RAG context |
+| `BATCH_CNT` | 처리/재시도 횟수 |
+
+## 실행 시간 집계
+
+Supervisor는 에이전트 실행 시간을 `AG_AGENT_RUN_METRICS`에 기록합니다.
 
 ```sql
 CREATE TABLE AG_AGENT_RUN_METRICS (
@@ -246,338 +390,49 @@ CREATE TABLE AG_AGENT_RUN_METRICS (
     ELAPSED_SECONDS     NUMBER,
     CREATED_AT          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-
-CREATE INDEX IX_AG_AGENT_RUN_METRICS_01
-    ON AG_AGENT_RUN_METRICS (BATCH_NO, CYCLE_NO, AGENT_NAME);
 ```
 
-기존에 `AG_AGENT_RUN_METRICS`를 이미 생성했다면 아래 DDL로 `BATCH_NO`를 추가합니다.
-
-```sql
-ALTER TABLE AG_AGENT_RUN_METRICS ADD (BATCH_NO NUMBER);
-
-DROP INDEX IX_AG_AGENT_RUN_METRICS_01;
-
-CREATE INDEX IX_AG_AGENT_RUN_METRICS_01
-    ON AG_AGENT_RUN_METRICS (BATCH_NO, CYCLE_NO, AGENT_NAME);
-```
-
----
-
-## SQL 보조 서비스
-
-`server/services/sql/`에는 Supervisor가 직접 호출하는 Agent 외에도, SQL 작업 데이터를 준비하거나 검증을 보조하는 유틸 서비스가 있습니다. 운영 흐름에서는 `main.py`가 `NEXT_SQL_INFO`를 폴링해 변환/튜닝을 수행하지만, MyBatis mapper XML을 처음 적재하거나 튜닝 룰 테이블을 준비할 때는 아래 보조 기능을 별도로 실행해야 합니다.
-
-### MyBatis XML Parser
-
-파일: `server/services/sql/xml_parser_service.py`
-
-MyBatis mapper XML을 읽어 `NEXT_SQL_INFO`에 SQL 작업 후보를 동기화하는 4단계 유틸입니다.
-
-| Stage | 동작 | 결과 |
-|------|------|------|
-| `stage1` | `MAPPER_XML_SOURCE_DIR` 하위의 mapper XML을 재귀 파싱 | `server/services/sql/DATA/*.json` 또는 지정 출력 경로에 JSON 생성 |
-| `stage2` | stage1 JSON을 `NEXT_SQL_INFO`에 MERGE upsert | `TAG_KIND`, `SPACE_NM`, `SQL_ID`, `FR_SQL_TEXT`, `TARGET_TABLE` 저장 |
-| `stage3` | `<include refid="...">` SQL fragment를 재귀 확장 | 확장된 SQL을 `EDIT_FR_SQL`에 저장 |
-| `stage4` | 활성 SQL ID 기준으로 정리하고 테이블명 보정 | 비활성 SQL 삭제, `TARGET_TABLE` 보정 |
-| `all` | `stage1`부터 `stage4`까지 순서대로 실행 | XML 적재부터 정리까지 일괄 수행 |
-
-실행 예시는 다음과 같습니다.
-
-```bash
-python -m server.services.sql.xml_parser_service all
-python -m server.services.sql.xml_parser_service stage1 --source-dir C:\path\to\mapper --output-dir C:\path\to\xml-json
-python -m server.services.sql.xml_parser_service stage2 --output-dir C:\path\to\xml-json
-python -m server.services.sql.xml_parser_service stage3
-python -m server.services.sql.xml_parser_service stage4
-```
-
-필수 환경 변수는 아래 항목입니다.
-
-```env
-MAPPER_XML_SOURCE_DIR=C:\path\to\mapper-xml
-XML_PARSER_DATA_DIR=server/services/sql/DATA
-ACTIVE_SQL_ID_TABLE=ACTIVE_SQL_ID_TABLE_NAME
-ACTIVE_SQL_ID_COLUMN=SQL_ID
-```
-
-주의할 점은 `ACTIVE_SQL_ID_COLUMN` 값이 반드시 `namespace.sqlId` 형식이어야 한다는 것입니다. 예를 들어 `com.example.UserMapper.selectUser`처럼 namespace와 SQL ID가 함께 있어야 mapper namespace 충돌을 피할 수 있습니다.
-
-### MyBatis Materializer
-
-파일: `server/services/sql/mybatis_materializer_service.py`
-
-MyBatis 동적 SQL을 특정 bind 값 기준의 실행 SQL 문자열로 렌더링하는 내부 유틸입니다. `<if>`, `<choose>`, `<when>`, `<otherwise>`, `<where>`, `<trim>`, `<foreach>`와 `#{param}`, `${param}` 토큰을 처리합니다.
-
-이 파일은 CLI 진입점이 없고, SQL 검증/테스트 SQL 생성 과정에서 import해서 사용하는 보조 함수 성격입니다. 직접 확인하려면 Python에서 `materialize_sql(sql_text, bind_case)`를 호출합니다.
-
-```python
-from server.services.sql.mybatis_materializer_service import materialize_sql
-
-sql = """
-SELECT *
-FROM USERS
-<where>
-  <if test="userId != null">AND USER_ID = #{userId}</if>
-</where>
-"""
-
-print(materialize_sql(sql, {"userId": 100}))
-```
-
-### Bind/Validation/Tuning 서비스
-
-| 파일 | 역할 | 직접 실행 |
-|------|------|----------|
-| `binding_service.py` | MyBatis bind 파라미터 추출, bind case 최대 3개 구성, JSON 직렬화 | 없음 |
-| `validation_service.py` | LLM이 만든 bind/test SQL 실행, row count 검증 결과 판정 | 없음 |
-| `tobe_sql_tuning_service.py` | `NEXT_SQL_RULES` 또는 JSON fallback에서 범용/검색 튜닝 룰 로드, FAISS/임베딩 검색, 실패 시 토큰 검색 fallback | 없음 |
-| `prompt_service.py` | `server/config/prompts/*.json` 프롬프트 템플릿 로드, SQL/JSON 입력을 LLM 친화적인 fenced block/text 구조로 렌더링 | 없음 |
-| `llm_service.py` | TO-BE SQL, bind SQL, test SQL, 튜닝 SQL 생성을 위한 LLM 호출 래퍼 | 없음 |
-| `sql_formatting_service.py` | DB 저장 전 SQL 가독성 확인용 포맷팅 헬퍼. 현재 자동 저장 경로에는 연결하지 않음 | 없음 |
-| `batch_scheduler.py` | `NEXT_SQL_INFO`를 1분마다 폴링하는 SQL 변환/튜닝 단독 스케줄러 | 가능 |
-
-`batch_scheduler.py`는 Supervisor 없이 SQL 파이프라인만 돌리고 싶을 때 사용할 수 있습니다.
-
-```bash
-python -m server.services.sql.batch_scheduler
-```
-
-다만 기본 운영 경로는 `python main.py`입니다. Supervisor는 Migration, SQL Conversion, SQL Tuning 대기열을 함께 polling하고, 각 에이전트별로 최대 20건씩 dispatch하므로 전체 파이프라인 운영에는 Supervisor 실행을 우선 사용합니다.
-
-### SQL 프롬프트 렌더링과 디버깅
-
-SQL 계열 프롬프트(`tobe_sql_prompt.json`, `bind_sql_prompt.json`, `test_sql_prompt.json`, `tobe_sql_tuning_prompt.json`)는 JSON 템플릿을 로드하되, LLM에 전달할 때는 전체 payload를 JSON 문자열로 직렬화하지 않습니다. `prompt_service.py`가 다음 기준으로 system message를 재구성합니다.
-
-- SQL 입력(`from_sql`, `tobe_sql`, `source_sql`, `target_sql`, `current_tobe_sql`)은 ```sql fenced block으로 전달
-- `bind_param_metadata_json`, `bind_target_hints_json`, `searched_tuning_rule_block_rag_json`, `universal_tuning_rules`는 프롬프트 조합 단계에서 파싱 후 text 구조로 펼쳐 전달
-- `mapping_schema_text`, `source_schema`, `target_schema`는 SQL 생성 및 검증 SQL 생성 시 스키마 판단 근거로 전달
-- 입력 문자열 안의 리터럴 `\n`, `\t`와 실제 tab은 프롬프트 조합 단계에서 줄바꿈/공백으로 정규화
-- `rules` 배열은 bullet list로 전달
-
-실제 LLM에 들어가는 프롬프트를 파일로 확인하려면 `server/services/sql/PROMPT_DEBUG_SNIPPET.md`의 스니펫을 임시로 `prompt_service.py`에 복사해서 사용합니다. 디버그 실행 시 사람이 읽을 `.md` 파일과 원재료 확인용 `.json` 파일이 아래 경로에 생성됩니다.
-
-```text
-server/services/sql/debug_prompts/
-```
-
-프롬프트 디버깅 파일에는 SQL 원문과 매핑 정보가 남을 수 있으므로, 확인 후 삭제하고 스니펫은 원래 코드로 되돌립니다.
-
-### SQL 저장 포맷팅 가이드
-
-`TEST_SQL`은 검증용 중첩 쿼리 특성상 한 줄로 길어지기 쉽습니다. SQL 저장 가독성 기준은 `server/services/sql/SQL_FORMATTING_GUIDE.md`에 문서화되어 있고, 수동 확인용 포맷터는 `server/services/sql/sql_formatting_service.py`에 분리되어 있습니다.
-
-```python
-from server.services.sql.sql_formatting_service import format_sql_for_storage
-
-formatted_test_sql = format_sql_for_storage(state.test_sql)
-```
-
-현재 포맷터는 자동 저장 경로에 연결되어 있지 않습니다. 저장 시점에 자동 적용하려면 `server/repositories/sql/result_repository.py`의 `update_cycle_result()`에서 payload 생성 전에 연결합니다.
-
-### 튜닝 룰 테이블과 보조 스크립트
-
-튜닝 룰은 우선 `NEXT_SQL_RULES` 테이블에서 읽습니다. `RULE_TYPE='GENERAL'`은 모든 튜닝 프롬프트에 직접 들어가는 범용 룰이고, `RULE_TYPE='SEARCH'`는 RAG/FAISS 검색 대상 룰입니다. DB 로드에 실패하면 검색 룰은 `server/services/sql/data/rag/tobe_rule_catalog.json`, 범용 룰은 `server/services/sql/data/rules/universal_tuning_rules.json`으로 fallback합니다. JSON 룰을 DB 테이블로 적재하려면 다음 스크립트를 실행합니다.
+## 보조 스크립트
 
 ```bash
 python scripts/create_sql_rules_table.py
-```
-
-매핑 룰 조회 및 샘플 매핑 룰 적재 스크립트도 제공됩니다.
-
-```bash
 python scripts/list_mapping_rules.py --format table
 python scripts/list_mapping_rules.py --fr-table EMPLOYEES --format json
 python scripts/seed_mig_rules.py
 python scripts/init_db.py
 ```
 
-`scripts/init_db.py`는 Oracle 연결, 필수 테이블 접근, LLM 연결 상태를 점검합니다. 운영 전 가장 먼저 실행해 `.env`와 DB 권한 문제를 확인하는 용도입니다.
-
----
-
-## 프론트엔드 (Streamlit 대시보드)
-
-Streamlit 기반 웹 UI로 에이전트 실행 현황을 실시간으로 모니터링하고 제어합니다.
-
-### 페이지 구성
-
-| 페이지 | 설명 |
-|--------|------|
-| **Dashboard** | 전체 현황 요약 + AI 챗봇 (자연어로 DB 조회) |
-| **Mig Agent Monitor** | Migration 작업 목록·상태·SQL 로그 조회 |
-| **SQL Agent Monitor** | SQL 변환 작업·생성된 TO-BE SQL·바인드 정보 조회 |
-| **Tuning Agent Monitor** | 튜닝 진행 현황·적용된 RAG 룰 조회 |
-| **Job Detail** | 개별 작업 상세 정보 (SQL 전문·바인드 셋·오류 내역) |
-| **RAG Rule Manager** | 튜닝 룰 카탈로그 업로드·편집 |
-| **System Health** | DB 연결·LLM 연결·테이블 상태 점검 |
-| **Settings** | 환경 변수 관리 및 에이전트 프로세스 재시작 |
-
-### 에이전트 제어 (사이드바)
-
-```
-[Start]  — main.py 서브프로세스 실행
-[Pause]  — runtime/agent.pause 플래그 생성 (일시 정지)
-[Resume] — 플래그 삭제 (재개)
-[Stop]   — SIGTERM 전송 (종료)
-```
-
----
-
-## 기술 스택
-
-| 영역 | 기술 |
-|------|------|
-| 언어 | Python 3.8+ |
-| 멀티 에이전트 | LangGraph 0.2+ (상태 그래프) |
-| LLM | LangChain + OpenAI / Anthropic (설정 가능) |
-| 벡터 DB | FAISS CPU (RAG 임베딩) |
-| 데이터베이스 | Oracle DB (oracledb 2.1+, Thick/Thin 모드) |
-| 프론트엔드 | Streamlit 1.35+ |
-| 데이터 처리 | Pandas 2.0+, Plotly 5.18+ |
-| 스케줄링 | APScheduler 3.10+ |
-| 설정 관리 | python-dotenv |
-
----
-
-## 설치 및 실행
-
-### 1. 의존성 설치
-
-```bash
-pip install -r requirements.txt
-```
-
-### 2. 환경 변수 설정
-
-`.env.example`을 복사해 `.env`를 만든 뒤, 실행 환경에 맞는 값을 채웁니다.
-
-```powershell
-Copy-Item .env.example .env
-```
-
-macOS/Linux에서는 다음 명령을 사용합니다.
-
-```bash
-cp .env.example .env
-```
-
-주요 설정값은 다음과 같습니다. 전체 예시는 `.env.example`을 기준으로 확인합니다.
-
-```env
-# Oracle DB
-DB_USER=
-DB_PASS=
-DB_HOST=localhost
-DB_PORT=1521
-DB_SID=xe
-ORACLE_CLIENT_PATH=          # 선택: Thick 모드 사용 시 Oracle Client 경로
-ORACLE_SCHEMA=               # 선택: 시스템 테이블(NEXT_MIG_INFO 등) 스키마 prefix
-ORACLE_SCHEMA_SRC=           # 선택: 원본 SQL 검증 시 사용할 source schema
-ORACLE_SCHEMA_TGT=           # 선택: TO-BE SQL/검증 실행 시 사용할 target schema
-
-# 대상 테이블
-MAPPING_RULE_TABLE=NEXT_MIG_INFO
-MAPPING_RULE_DETAIL_TABLE=NEXT_MIG_INFO_DTL
-RESULT_TABLE=NEXT_SQL_INFO
-
-# LLM (openai 또는 anthropic)
-LLM_PROVIDER=openai
-LLM_API_KEY=
-LLM_MODEL=gpt-4o-mini
-LLM_BASE_URL=                # 선택: 커스텀 엔드포인트 사용 시
-LLM_MAX_TOKENS=4096          # 숫자 입력 필요
-
-# RAG 임베딩
-RAG_EMBED_BASE_URL=
-RAG_EMBED_API_KEY=
-RAG_EMBED_MODEL=BAAI/bge-m3
-RAG_EMBED_TIMEOUT_SEC=30
-TOBE_RULE_CATALOG_PATH=server/services/sql/data/rag/tobe_rule_catalog.json
-UNIVERSAL_TUNING_RULES_PATH=server/services/sql/data/rules/universal_tuning_rules.json
-TOBE_SQL_TUNING_TOP_K=3
-TOBE_SQL_TUNING_MAX_ITERATIONS=1
-
-# MyBatis XML 파서
-MAPPER_XML_SOURCE_DIR=
-XML_PARSER_DATA_DIR=server/services/sql/DATA
-ACTIVE_SQL_ID_TABLE=
-ACTIVE_SQL_ID_COLUMN=SQL_ID
-
-# Supervisor 설정
-PLANNER_ENABLED=true
-PLANNER_MAX_MIG_PER_CYCLE=5
-SUPERVISOR_RECURSION_LIMIT=10000
-MIG_KIND=DB_MIG
-```
-
-현재 Supervisor는 작업 대상 선정에 LLM을 사용하지 않으며, 코드 기준 batch loop당 에이전트별 최대 20건을 실행합니다. `PLANNER_MAX_MIG_PER_CYCLE`은 예전 LLM planner/ReAct 모드 호환 설정으로 남아 있으며 현재 deterministic batch 실행 한도에는 사용하지 않습니다.
-
-### 3. 사전 점검
-
-```bash
-python scripts/init_db.py
-```
-
-### 4. MyBatis XML 적재가 필요한 경우
-
-mapper XML에서 `NEXT_SQL_INFO`를 생성해야 한다면 에이전트 실행 전에 XML 파서를 먼저 실행합니다.
-
-```bash
-python -m server.services.sql.xml_parser_service all
-```
-
-### 5. 에이전트 실행
-
-```bash
-python main.py
-```
-
-### 6. 대시보드 실행
-
-```bash
-streamlit run app/app.py
-```
-
----
-
 ## 프로젝트 구조
 
-```
+```text
 .
-├── main.py                        # 에이전트 시스템 진입점
+├── main.py
 ├── requirements.txt
-├── app/                           # Streamlit 대시보드
+├── app/
 │   ├── app.py
-│   ├── pages/                     # 모니터링·관리 페이지
-│   └── utils/                     # DB 조회·에이전트 제어 유틸
-├── scripts/                       # 점검·룰 적재·다이어그램 생성 스크립트
-│   ├── init_db.py                 # DB/LLM/테이블 health check
-│   ├── create_sql_rules_table.py  # 튜닝 룰 JSON → NEXT_SQL_RULES 적재
-│   ├── list_mapping_rules.py      # 매핑 룰 조회
-│   └── seed_mig_rules.py          # 샘플 매핑 룰 적재
-└── server/
-    ├── agents/
-    │   ├── supervisor/            # Supervisor Agent (LangGraph deterministic batch)
-    │   ├── migration/             # Mig Agent
-    │   ├── sql_conversion/        # SQL Agent
-    │   └── sql_tuning/            # Tuning Agent
-    ├── services/
-    │   ├── migration/             # 이관 비즈니스 로직
-    │   └── sql/                   # SQL 변환·튜닝 파이프라인
-    │       ├── xml_parser_service.py
-    │       ├── mybatis_materializer_service.py
-    │       ├── binding_service.py
-    │       ├── validation_service.py
-    │       ├── prompt_service.py
-    │       ├── sql_formatting_service.py
-    │       ├── PROMPT_DEBUG_SNIPPET.md
-    │       ├── SQL_FORMATTING_GUIDE.md
-    │       └── data/rag/tobe_rule_catalog.json
-    ├── repositories/              # DB 접근 레이어
-    ├── core/                      # DB 연결·LLM 클라이언트·로거
-    ├── tools/                     # Supervisor Tool 정의
-    └── config/
-        ├── settings.py
-        └── prompts/               # LLM 프롬프트 템플릿 (JSON)
+│   ├── pages/
+│   └── utils/
+├── scripts/
+├── server/
+│   ├── agents/
+│   │   ├── migration/
+│   │   ├── sql_conversion/
+│   │   ├── sql_tuning/
+│   │   └── supervisor/
+│   ├── config/
+│   │   └── prompts/
+│   ├── core/
+│   ├── repositories/
+│   ├── services/
+│   │   ├── migration/
+│   │   └── sql/
+│   └── tools/
+└── tests/
 ```
+
+## 현재 설계상 주의사항
+
+- Bind SQL은 source/from SQL 기준입니다. target SQL이나 mapping rule 기준으로 후보 값을 재구성하지 않습니다.
+- Test SQL은 source SQL과 target SQL을 count subquery로 감싸 비교합니다. 매핑룰 기반 재작성은 하지 않습니다.
+- 프롬프트 JSON에 BOM이 있어도 `utf-8-sig`로 읽기 때문에 로드 오류가 나지 않아야 합니다.
+- LLM 출력 SQL은 MyBatis 태그, placeholder, markdown, 세미콜론이 남지 않도록 프롬프트와 후처리에서 제한합니다.
