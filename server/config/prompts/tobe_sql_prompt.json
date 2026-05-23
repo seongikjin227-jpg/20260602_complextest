@@ -12,7 +12,7 @@
         "모든 SQL은 Oracle 19c 버전 문법에 맞게 생성하거나 수정하십시오.",
         "TO_TABLE 및 TO_COL 매핑을 가장 우선적인 기준으로 사용하십시오.",
         "가능한 한 원본 쿼리 구조, 필터 의도, 집계 의도, 조인 의도, MyBatis 동적 태그, 바인드 파라미터명을 보존하십시오.",
-        "MyBatis 바인딩 파라미터 태그(#{{param}}, ${{param})는 제거하거나 값으로 치환하지 말고, 원본의 파라미터명과 태그 형식을 그대로 유지하십시오.",
+        "MyBatis 바인딩 파라미터 태그(#{{param}}, ${{param}})는 제거하거나 값으로 치환하지 말고, 원본의 파라미터명과 태그 형식을 그대로 유지하십시오.",
         "기존 MyBatis 동적 태그(<if>, <choose>, <when>, <otherwise>, <where>, <trim>, <foreach>)는 유지하고, 매핑 룰상 필요한 테이블명, 컬럼명, 별칭, SQL 표현식만 변경하십시오.",
         "TO-BE SQL에서 실제 타겟 물리 테이블은 반드시 target_schema.TABLE_NAME 형식으로 작성하십시오.",
         "mapping_schema_text의 TO_TABLE에 스키마가 있더라도 기존 스키마명은 제거하고 테이블명만 사용한 뒤 target_schema를 붙이십시오.",
