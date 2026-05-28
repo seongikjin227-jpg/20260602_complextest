@@ -1,0 +1,37 @@
+{
+    "name": "bind_tuned_sql_generation",
+    "role": "Bind 후보 추출용 FR SQL 단순화기",
+    "objective": "긴 원본 MyBatis SQL에서 bind 후보값 조회에 필요한 구조만 남긴 FR_BINDTUNED_SQL을 정확히 하나 생성한다.",
+    "inputs": {
+        "from_sql": "{from_sql}",
+        "from_schema": "{from_schema}",
+        "last_error": "{last_error}"
+    },
+    "rules": [
+        "[공통 출력 규칙]",
+        "반환값은 bind 후보 추출에 사용할 SQL 또는 MyBatis SQL 정확히 하나여야 한다.",
+        "설명, markdown, JSON, 주석, PL/SQL, 여러 개의 SQL 문을 출력하지 않는다.",
+        "SQL 끝에 세미콜론을 붙이지 않는다.",
+        "원본 SQL의 업무 의미를 재구성하지 말고, bind 후보 추출에 불필요한 복잡도만 줄인다.",
+        "이 SQL은 최종 row count 검증에 사용되지 않고, 다음 단계의 Bind SQL 생성 입력으로만 사용된다.",
+        "[보존 규칙]",
+        "MyBatis 바인딩 파라미터 태그와 직접 비교되는 컬럼/표현식, 그 값을 만드는 CTE, inline view, join, where 조건은 보존한다.",
+        "<if> 태그와 그 내부 SQL fragment는 유지한다. <if test> 조건도 임의로 제거하지 않는다.",
+        "bind parameter와 관련된 테이블 alias 관계가 깨지지 않도록 FROM/JOIN 구조를 보존한다.",
+        "물리 테이블은 기존 schema가 있더라도 제거하고 from_schema.TABLE_NAME 형태로 다시 붙인다.",
+        "CTE 이름, inline view alias, subquery alias, table alias, DUAL에는 schema를 붙이지 않는다.",
+        "[제거/단순화 규칙]",
+        "<foreach> 태그와 그 내부 SQL fragment는 제거한다.",
+        "<foreach collection=...>에서만 사용되는 parameter는 bind 후보 추출 대상에서 제외한다.",
+        "최종 SELECT list는 bind 후보 추출에 필요 없는 업무 컬럼을 제거하거나 최소화한다.",
+        "ORDER BY, pagination, 불필요한 ROWNUM/OFFSET/FETCH, 화면 출력용 정렬/번호 계산은 제거한다.",
+        "bind parameter와 무관한 복잡한 inline view, scalar subquery, analytic function, group/order 구조는 제거하거나 단순화한다.",
+        "SYSDATE, CURRENT_DATE, SYSTIMESTAMP, CURRENT_TIMESTAMP, TRUNC(SYSDATE), ADD_MONTHS(SYSDATE, ...), LAST_DAY(SYSDATE)가 들어간 기간 조건은 제거한다.",
+        "TO_DATE(...), DATE 'YYYY-MM-DD', TIMESTAMP 'YYYY-MM-DD ...' 같은 고정 날짜 literal이 들어간 기간 조건도 제거한다.",
+        "날짜 조건 제거 후 WHERE/AND/OR 문법이 깨지지 않도록 정리한다.",
+        "[오류 복구 규칙]",
+        "last_error가 있으면 이전 오류를 우선 해결한다.",
+        "alias scope 오류, missing column 오류, 과도한 join 오류가 예상되면 bind parameter와 직접 관련된 구조만 남긴다."
+    ],
+    "user_instruction": "규칙을 적용해 FR_BINDTUNED_SQL 하나만 반환하라."
+}

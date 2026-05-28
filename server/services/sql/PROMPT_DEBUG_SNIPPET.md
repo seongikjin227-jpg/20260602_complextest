@@ -7,6 +7,7 @@ Debug target prompt files:
 - `tobe_sql_prompt.json`
 - `tobe_sql_tuning_prompt.json`
 - `bind_sql_prompt.json`
+- `bind_tuned_sql_prompt.json`
 - `bind_sql_final_retry_prompt.json`
 - `test_sql_prompt.json`
 - `test_sql_final_retry_prompt.json`
@@ -20,6 +21,7 @@ debug_prompt_files = {
     "tobe_sql_prompt.json",
     "tobe_sql_tuning_prompt.json",
     "bind_sql_prompt.json",
+    "bind_tuned_sql_prompt.json",
     "bind_sql_final_retry_prompt.json",
     "test_sql_prompt.json",
     "test_sql_final_retry_prompt.json",
@@ -62,12 +64,14 @@ server/services/sql/debug_prompts/
   tobe_sql_prompt_debug.md
   tobe_sql_tuning_prompt_debug.md
   bind_sql_prompt_debug.md
+  bind_tuned_sql_prompt_debug.md
   bind_sql_final_retry_prompt_debug.md
   test_sql_prompt_debug.md
   test_sql_final_retry_prompt_debug.md
   tobe_sql_prompt_debug_payload.json
   tobe_sql_tuning_prompt_debug_payload.json
   bind_sql_prompt_debug_payload.json
+  bind_tuned_sql_prompt_debug_payload.json
   bind_sql_final_retry_prompt_debug_payload.json
   test_sql_prompt_debug_payload.json
   test_sql_final_retry_prompt_debug_payload.json

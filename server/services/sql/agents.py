@@ -4,6 +4,7 @@ import os
 import random
 import time
 
+from server.config import settings
 from server.core.exceptions import LLMRateLimitError
 from server.core.logger import logger
 from server.repositories.sql.mapper_repository import get_all_mapping_rules, get_unready_target_tables
@@ -11,11 +12,13 @@ from server.repositories.sql.result_repository import (
     reset_tuning_state,
     update_block_rag_content,
     update_cycle_result,
+    update_fr_bindtuned_sql,
     update_job_skip,
 )
 from server.services.sql.binding_service import bind_sets_to_json, build_bind_sets, extract_bind_param_names
 from server.services.sql.llm_service import (
     generate_bind_sql,
+    generate_bind_tuned_sql,
     generate_sql_comparison_test_sql,
     generate_test_sql,
     generate_tobe_sql,
@@ -81,9 +84,11 @@ class TobeSqlGenerationAgent:
                     "enabled (template=bind_sql_final_retry_prompt.json)"
                 )
 
+            bind_source_sql = self._prepare_bind_source_sql(state)
             state.bind_sql = generate_bind_sql(
                 job=state.job,
                 last_error=state.last_error,
+                bind_source_sql=bind_source_sql,
             )
             logger.info(
                 f"[{self.name}] ({state.job_key}) stage=GENERATE_BIND_SQL "
@@ -136,6 +141,26 @@ class TobeSqlGenerationAgent:
             f"[{self.name}] ({state.job_key}) stage=EVALUATE_STATUS "
             f"completed (status={state.status})"
         )
+
+
+
+    def _prepare_bind_source_sql(self, state: JobExecutionState) -> str:
+        original_sql = state.job.source_sql or ""
+        status = (state.job.status or "").strip().upper()
+        min_length = max(0, settings.BIND_SQL_PRETUNING_MIN_LENGTH)
+        if not settings.BIND_SQL_PRETUNING_ENABLED or status != "FAIL" or len(original_sql) < min_length:
+            return original_sql
+
+        tuned_sql = generate_bind_tuned_sql(
+            job=state.job,
+            last_error=state.last_error,
+        )
+        update_fr_bindtuned_sql(row_id=state.job.row_id, fr_bindtuned_sql=tuned_sql)
+        logger.info(
+            f"[{self.name}] ({state.job_key}) stage=BIND_TUNING applied "
+            f"(status={status}, original_len={len(original_sql)}, tuned_len={len(tuned_sql)})"
+        )
+        return tuned_sql
 
 
 class SqlTuningAgent:

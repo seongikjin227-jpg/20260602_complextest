@@ -123,6 +123,7 @@ def _row_to_sql_info_job(row) -> SqlInfoJob:
         fr_sql_text=_to_text(row[4]),
         target_table=_to_optional_text(row[5]),
         edit_fr_sql=_to_optional_text(row[6]),
+        fr_bindtuned_sql=_to_optional_text(row[17]) if len(row) > 17 else None,
         to_sql_text=_to_optional_text(row[7]),
         tuned_sql=_to_optional_text(row[8]),
         tuned_test=_to_optional_text(row[9]),
@@ -133,9 +134,9 @@ def _row_to_sql_info_job(row) -> SqlInfoJob:
         log_text=_to_optional_text(row[14]),
         upd_ts=row[15],
         edited_yn=_to_optional_text(row[16]),
-        tobe_correct_sql=_to_optional_text(row[17]) if len(row) > 17 else None,
-        bind_correct_sql=_to_optional_text(row[18]) if len(row) > 18 else None,
-        test_correct_sql=_to_optional_text(row[19]) if len(row) > 19 else None,
+        tobe_correct_sql=_to_optional_text(row[18]) if len(row) > 18 else None,
+        bind_correct_sql=_to_optional_text(row[19]) if len(row) > 19 else None,
+        test_correct_sql=_to_optional_text(row[20]) if len(row) > 20 else None,
     )
 
 
@@ -158,6 +159,7 @@ def get_pending_jobs() -> list[SqlInfoJob]:
     )
     tuned_sql_column = "TUNED_SQL" if "TUNED_SQL" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS TUNED_SQL"
     tuned_test_column = "TUNED_TEST" if "TUNED_TEST" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS TUNED_TEST"
+    fr_bindtuned_sql_column = "FR_BINDTUNED_SQL" if "FR_BINDTUNED_SQL" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS FR_BINDTUNED_SQL"
     batch_limit_clause = "AND NVL(BATCH_CNT, 0) < 30" if "BATCH_CNT" in available_columns else ""
     tuning_job_exclusion_clause = (
         "AND NOT (UPPER(TRIM(STATUS)) = 'PASS' AND TO_SQL_TEXT IS NOT NULL AND UPPER(TRIM(TUNED_TEST)) IN ('READY', 'FAIL'))"
@@ -169,7 +171,7 @@ def get_pending_jobs() -> list[SqlInfoJob]:
         SELECT ROWIDTOCHAR(ROWID) AS RID,
                TAG_KIND, SPACE_NM, SQL_ID, FR_SQL_TEXT, TARGET_TABLE, EDIT_FR_SQL,
                TO_SQL_TEXT, {tuned_sql_column}, {tuned_test_column}, BIND_SQL, BIND_SET, TEST_SQL, STATUS, LOG,
-               UPD_TS, EDITED_YN, {select_correct_cols}
+               UPD_TS, EDITED_YN, {fr_bindtuned_sql_column}, {select_correct_cols}
         FROM {table}
         WHERE (UPPER(TRIM(STATUS)) IN ('URGENT', 'FAIL', 'READY', 'PENDING', 'SKIP') OR STATUS IS NULL)
           {tuning_job_exclusion_clause}
@@ -215,13 +217,14 @@ def get_tuning_jobs() -> list:
         for column in ("TOBE_CORRECT_SQL", "BIND_CORRECT_SQL", "TEST_CORRECT_SQL")
     )
     tuned_sql_column = "TUNED_SQL" if "TUNED_SQL" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS TUNED_SQL"
+    fr_bindtuned_sql_column = "FR_BINDTUNED_SQL" if "FR_BINDTUNED_SQL" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS FR_BINDTUNED_SQL"
     batch_limit_clause = "AND NVL(BATCH_CNT, 0) < 30" if "BATCH_CNT" in available_columns else ""
 
     query = f"""
         SELECT ROWIDTOCHAR(ROWID) AS RID,
                TAG_KIND, SPACE_NM, SQL_ID, FR_SQL_TEXT, TARGET_TABLE, EDIT_FR_SQL,
                TO_SQL_TEXT, {tuned_sql_column}, TUNED_TEST, BIND_SQL, BIND_SET, TEST_SQL, STATUS, LOG,
-               UPD_TS, EDITED_YN, {select_correct_cols}
+               UPD_TS, EDITED_YN, {fr_bindtuned_sql_column}, {select_correct_cols}
         FROM {table}
         WHERE (TUNED_TEST IS NULL OR UPPER(TRIM(TUNED_TEST)) <> 'PASS')
           AND TO_SQL_TEXT IS NOT NULL
@@ -361,6 +364,29 @@ def update_block_rag_content(row_id: str, block_rag_content: str) -> None:
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(query, [payload["BLOCK_RAG_CONTENT"], row_id])
+        conn.commit()
+
+
+
+def update_fr_bindtuned_sql(row_id: str, fr_bindtuned_sql: str) -> None:
+    table = get_result_table()
+    available_columns = _get_available_columns(table)
+    if "FR_BINDTUNED_SQL" not in available_columns:
+        logger.warning("[Repo] FR_BINDTUNED_SQL column is not available; bind pretuning SQL was not saved.")
+        return
+
+    payload = _fit_payload_to_column_limits(
+        table=table,
+        values={"FR_BINDTUNED_SQL": fr_bindtuned_sql},
+    )
+    query = f"""
+        UPDATE {table}
+        SET FR_BINDTUNED_SQL = :1
+        WHERE ROWID = CHARTOROWID(:2)
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(query, [payload["FR_BINDTUNED_SQL"], row_id])
         conn.commit()
 
 

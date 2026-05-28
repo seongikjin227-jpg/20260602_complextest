@@ -440,11 +440,30 @@ def generate_tobe_sql(
     )
 
 
-def generate_bind_sql(
+
+def generate_bind_tuned_sql(
     job: SqlInfoJob,
     last_error: str | None = None,
 ) -> str:
+    return call_llm_api(
+        api_key=None,
+        model=None,
+        base_url=None,
+        messages=_build_sql_messages(
+            "bind_tuned_sql_prompt.json",
+            from_sql=job.source_sql,
+            from_schema=_schema_env("ORACLE_SCHEMA_SRC") or "UNKNOWN",
+            last_error=last_error or "None",
+        ),
+    )
+
+def generate_bind_sql(
+    job: SqlInfoJob,
+    last_error: str | None = None,
+    bind_source_sql: str | None = None,
+) -> str:
     template_name = "bind_sql_final_retry_prompt.json" if _is_final_retry_mode(last_error) else "bind_sql_prompt.json"
+    source_sql = bind_source_sql or job.source_sql
     correct_sql_hints = correct_sql_hint_rag_service.retrieve_correct_sql_hints(
         sql_text=job.source_sql,
         correct_kind="BIND",
@@ -456,7 +475,7 @@ def generate_bind_sql(
         base_url=None,
         messages=_build_sql_messages(
             template_name,
-            from_sql=job.source_sql,
+            from_sql=source_sql,
             from_schema=_schema_env("ORACLE_SCHEMA_SRC") or "UNKNOWN",
             correct_sql_hint_json=serialize_correct_sql_hints_for_prompt(correct_sql_hints),
             last_error=last_error or "None",

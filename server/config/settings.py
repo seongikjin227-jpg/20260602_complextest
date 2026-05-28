@@ -38,6 +38,8 @@ RAG_EMBED_API_KEY    = os.getenv("RAG_EMBED_API_KEY", "").strip()
 RAG_EMBED_MODEL      = os.getenv("RAG_EMBED_MODEL", "BAAI/bge-m3").strip()
 TUNING_TOP_K         = int(os.getenv("TOBE_SQL_TUNING_TOP_K", "3"))
 TUNING_MAX_ITER      = int(os.getenv("TOBE_SQL_TUNING_MAX_ITERATIONS", "1"))
+BIND_SQL_PRETUNING_ENABLED = os.getenv("BIND_SQL_PRETUNING_ENABLED", "false").strip().lower() == "true"
+BIND_SQL_PRETUNING_MIN_LENGTH = int(os.getenv("BIND_SQL_PRETUNING_MIN_LENGTH", "8000"))
 
 # ── Planner ──────────────────────────────────────────────────────────────────
 PLANNER_ENABLED          = os.getenv("PLANNER_ENABLED", "true").lower() == "true"

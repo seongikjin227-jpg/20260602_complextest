@@ -14,6 +14,7 @@ class SqlInfoJob:
     fr_sql_text: str
     target_table: Optional[str] = None
     edit_fr_sql: Optional[str] = None
+    fr_bindtuned_sql: Optional[str] = None
     to_sql_text: Optional[str] = None
     tuned_sql: Optional[str] = None
     tuned_test: Optional[str] = None
