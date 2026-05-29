@@ -2,6 +2,7 @@
 
 import os
 import random
+import re
 import time
 
 from server.config import settings
@@ -13,8 +14,9 @@ from server.repositories.sql.result_repository import (
     update_block_rag_content,
     update_cycle_result,
     update_fr_bindtuned_sql,
-    update_job_skip,
+    update_job_na,
 )
+from server.repositories.sql.log_repository import insert_sql_log
 from server.services.sql.binding_service import bind_sets_to_json, build_bind_sets, extract_bind_param_names
 from server.services.sql.llm_service import (
     generate_bind_sql,
@@ -33,6 +35,16 @@ from server.services.sql.validation_service import (
 )
 from server.services.sql.workflow.graph import build_migration_workflow
 from server.services.sql.workflow.state import JobExecutionState
+
+
+def _attempt_no(last_error: str | None) -> int | None:
+    match = re.search(r"\battempt\s*=\s*(\d+)\s*/\s*\d+", last_error or "", re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except Exception:
+        return None
 
 
 class MappingRuleProvider:
@@ -95,7 +107,28 @@ class TobeSqlGenerationAgent:
                 f"completed (sql_length={len(state.bind_sql)}, final_retry_mode={'ON' if bind_final_retry_mode else 'OFF'})"
             )
 
-            bind_query_rows = execute_binding_query(state.bind_sql, max_rows=50)
+            started = time.perf_counter()
+            try:
+                bind_query_rows = execute_binding_query(state.bind_sql, max_rows=50)
+                self._log_sql_execution(
+                    state=state,
+                    sql_kind="BIND_SQL",
+                    sql_content=state.bind_sql,
+                    status="SUCCESS",
+                    stage_name="EXECUTE_BIND_SQL",
+                    elapsed_seconds=time.perf_counter() - started,
+                )
+            except Exception as exc:
+                self._log_sql_execution(
+                    state=state,
+                    sql_kind="BIND_SQL",
+                    sql_content=state.bind_sql,
+                    status="FAIL",
+                    stage_name="EXECUTE_BIND_SQL",
+                    elapsed_seconds=time.perf_counter() - started,
+                    error_message=str(exc),
+                )
+                raise
             logger.info(
                 f"[{self.name}] ({state.job_key}) stage=EXECUTE_BIND_SQL "
                 f"completed (rows={len(bind_query_rows)})"
@@ -130,13 +163,34 @@ class TobeSqlGenerationAgent:
             f"completed (sql_length={len(state.test_sql)}, final_retry_mode={'ON' if final_retry_mode else 'OFF'})"
         )
 
-        state.test_rows = execute_test_query(state.test_sql)
+        started = time.perf_counter()
+        try:
+            state.test_rows = execute_test_query(state.test_sql)
+        except Exception as exc:
+            self._log_sql_execution(
+                state=state,
+                sql_kind="TEST_SQL",
+                sql_content=state.test_sql,
+                status="FAIL",
+                stage_name="EXECUTE_TEST_SQL",
+                elapsed_seconds=time.perf_counter() - started,
+                error_message=str(exc),
+            )
+            raise
         logger.info(
             f"[{self.name}] ({state.job_key}) stage=EXECUTE_TEST_SQL "
             f"completed (rows={len(state.test_rows)})"
         )
 
         state.status = evaluate_status_from_test_rows(state.test_rows)
+        self._log_sql_execution(
+            state=state,
+            sql_kind="TEST_SQL",
+            sql_content=state.test_sql,
+            status=state.status,
+            stage_name="EXECUTE_TEST_SQL",
+            elapsed_seconds=time.perf_counter() - started,
+        )
         logger.info(
             f"[{self.name}] ({state.job_key}) stage=EVALUATE_STATUS "
             f"completed (status={state.status})"
@@ -161,6 +215,31 @@ class TobeSqlGenerationAgent:
             f"(status={status}, original_len={len(original_sql)}, tuned_len={len(tuned_sql)})"
         )
         return tuned_sql
+
+    @staticmethod
+    def _log_sql_execution(
+        *,
+        state: JobExecutionState,
+        sql_kind: str,
+        sql_content: str | None,
+        status: str,
+        stage_name: str,
+        elapsed_seconds: float,
+        error_message: str | None = None,
+    ) -> None:
+        insert_sql_log(
+            space_nm=state.job.space_nm,
+            sql_id=state.job.sql_id,
+            sql_info_rowid=state.job.row_id,
+            sql_kind=sql_kind,
+            sql_content=sql_content,
+            status=status,
+            model_name=os.getenv("LLM_MODEL", "").strip(),
+            elapsed_seconds=elapsed_seconds,
+            attempt_no=_attempt_no(state.last_error),
+            stage_name=stage_name,
+            error_message=error_message,
+        )
 
 
 class SqlTuningAgent:
@@ -199,6 +278,7 @@ class SqlTuningAgent:
                 current_tobe_sql=current_sql,
                 tuning_examples=tuning_examples,
                 last_error=state.last_error,
+                job=state.job,
             )
             logger.info(
                 f"[{self.name}] ({state.job_key}) stage=APPLY_TUNING_RULES "
@@ -217,19 +297,49 @@ class SqlTuningAgent:
             candidate_sql=state.tuned_sql,
             bind_set_json=state.bind_set_for_db,
             last_error=state.last_error,
+            job=state.job,
         )
         logger.info(
             f"[{self.name}] ({state.job_key}) stage=GENERATE_TUNED_TEST_SQL "
             f"completed (sql_length={len(comparison_test_sql)})"
         )
 
-        comparison_rows = execute_test_query(comparison_test_sql)
+        started = time.perf_counter()
+        try:
+            comparison_rows = execute_test_query(comparison_test_sql)
+        except Exception as exc:
+            insert_sql_log(
+                space_nm=state.job.space_nm,
+                sql_id=state.job.sql_id,
+                sql_info_rowid=state.job.row_id,
+                sql_kind="TUNED_TEST_SQL",
+                sql_content=comparison_test_sql,
+                status="FAIL",
+                model_name=os.getenv("LLM_MODEL", "").strip(),
+                elapsed_seconds=time.perf_counter() - started,
+                attempt_no=_attempt_no(state.last_error),
+                stage_name="EXECUTE_TUNED_TEST_SQL",
+                error_message=str(exc),
+            )
+            raise
         logger.info(
             f"[{self.name}] ({state.job_key}) stage=EXECUTE_TUNED_TEST_SQL "
             f"completed (rows={len(comparison_rows)})"
         )
 
         state.tuned_test = evaluate_status_from_test_rows(comparison_rows)
+        insert_sql_log(
+            space_nm=state.job.space_nm,
+            sql_id=state.job.sql_id,
+            sql_info_rowid=state.job.row_id,
+            sql_kind="TUNED_TEST_SQL",
+            sql_content=comparison_test_sql,
+            status=state.tuned_test,
+            model_name=os.getenv("LLM_MODEL", "").strip(),
+            elapsed_seconds=time.perf_counter() - started,
+            attempt_no=_attempt_no(state.last_error),
+            stage_name="EXECUTE_TUNED_TEST_SQL",
+        )
         logger.info(
             f"[{self.name}] ({state.job_key}) stage=EVALUATE_TUNED_TEST "
             f"completed (status={state.tuned_test})"
@@ -253,7 +363,7 @@ class TobeMultiAgentCoordinator:
             tuning_agent=self.tuning_agent,
         )
 
-    def process_job(self, job) -> None:
+    def process_job(self, job) -> str:
         logger.info("\n==========================================")
         logger.info(f"[TobeMultiAgentCoordinator] Starting job ({job.space_nm}.{job.sql_id})")
         job_key = f"{job.space_nm}.{job.sql_id}"
@@ -271,9 +381,21 @@ class TobeMultiAgentCoordinator:
         unready_target_tables = get_unready_target_tables(job.target_table)
         if unready_target_tables:
             reason = "TARGET_MAPPING_NOT_READY: " + ",".join(unready_target_tables)
-            update_job_skip(row_id=job.row_id, reason=reason)
-            logger.warning(f"[TobeMultiAgentCoordinator] ({job_key}) skipped: {reason}")
-            return
+            update_job_na(row_id=job.row_id, reason=reason)
+            insert_sql_log(
+                space_nm=job.space_nm,
+                sql_id=job.sql_id,
+                sql_info_rowid=job.row_id,
+                sql_kind="ERROR",
+                sql_content=None,
+                status="NA",
+                model_name=os.getenv("LLM_MODEL", "").strip(),
+                attempt_no=_attempt_no(state.last_error),
+                stage_name="CHECK_TARGET_MAPPING",
+                error_message=reason,
+            )
+            logger.warning(f"[TobeMultiAgentCoordinator] ({job_key}) excluded: {reason}")
+            return "NA"
 
         while retry_count < max_retries:
             raw_last_error = state.last_error
@@ -299,7 +421,7 @@ class TobeMultiAgentCoordinator:
                 tag_kind = (job.tag_kind or "").strip().upper()
                 if terminal_action == "persist_non_select" or tag_kind != "SELECT":
                     self._complete_non_select_job(state, tag_kind)
-                    return
+                    return "PASS"
 
                 if state.status != "PASS":
                     retry_count += 1
@@ -314,7 +436,7 @@ class TobeMultiAgentCoordinator:
                     break
 
                 self._persist_success(state)
-                return
+                return state.status or "PASS"
 
             except LLMRateLimitError as exc:
                 retry_count += 1
@@ -340,6 +462,7 @@ class TobeMultiAgentCoordinator:
                 self._sleep_with_backoff(retry_count)
 
         self._persist_failure(state=state, stage=stage, retry_count=retry_count)
+        return "FAIL"
 
     def _build_state(self, job, last_error: str | None) -> JobExecutionState:
         return JobExecutionState(

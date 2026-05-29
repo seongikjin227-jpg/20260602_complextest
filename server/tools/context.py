@@ -53,6 +53,16 @@ def start_cycle_metrics(cycle_no: int) -> None:
     )
 
 
+def get_current_metric_context() -> dict[str, int | None]:
+    """Return current supervisor batch/cycle numbers for detailed logs."""
+    if not cycle_metrics:
+        return {"batch_no": None, "cycle_no": None}
+    return {
+        "batch_no": int(cycle_metrics.get("batch_no") or 0),
+        "cycle_no": int(cycle_metrics.get("cycle_no") or 0),
+    }
+
+
 def record_agent_run(agent_name: str, elapsed_seconds: float, status: str) -> None:
     """agent tool 실행 1건의 결과를 현재 cycle 집계에 누적합니다."""
     if not cycle_metrics:
@@ -71,9 +81,9 @@ def record_agent_run(agent_name: str, elapsed_seconds: float, status: str) -> No
     normalized_status = (status or "").strip().upper()
     metric["job_count"] += 1
     metric["elapsed_seconds"] += max(0.0, elapsed_seconds)
-    if normalized_status == "SKIP":
+    if normalized_status in ("SKIP", "NA"):
         metric["skip_count"] += 1
-    elif normalized_status == "SUCCESS":
+    elif normalized_status in ("SUCCESS", "PASS"):
         metric["success_count"] += 1
     else:
         metric["fail_count"] += 1

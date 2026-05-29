@@ -12,6 +12,7 @@ _CORRECT_COLUMN_MAP = {
     "TEST": "TEST_CORRECT_SQL",
 }
 _LEGACY_CORRECT_COLUMN = "CORRECT_SQL"
+_PENDING_JOB_STATUSES = ("URGENT", "FAIL", "READY", "PENDING", "SKIP")
 
 
 def _to_text(value, default: str = "") -> str:
@@ -167,13 +168,14 @@ def get_pending_jobs() -> list[SqlInfoJob]:
         else ""
     )
 
+    pending_status_sql = ", ".join(f"'{status}'" for status in _PENDING_JOB_STATUSES)
     query = f"""
         SELECT ROWIDTOCHAR(ROWID) AS RID,
                TAG_KIND, SPACE_NM, SQL_ID, FR_SQL_TEXT, TARGET_TABLE, EDIT_FR_SQL,
                TO_SQL_TEXT, {tuned_sql_column}, {tuned_test_column}, BIND_SQL, BIND_SET, TEST_SQL, STATUS, LOG,
                UPD_TS, EDITED_YN, {fr_bindtuned_sql_column}, {select_correct_cols}
         FROM {table}
-        WHERE (UPPER(TRIM(STATUS)) IN ('URGENT', 'FAIL', 'READY', 'PENDING', 'SKIP') OR STATUS IS NULL)
+        WHERE (UPPER(TRIM(STATUS)) IN ({pending_status_sql}) OR STATUS IS NULL)
           {tuning_job_exclusion_clause}
           {batch_limit_clause}
         ORDER BY
@@ -277,13 +279,13 @@ def update_tuning_error(row_id: str, error_msg: str, tuned_sql: str | None = Non
         logger.error(f"[Repo] Tuning error update failed: {e}")
 
 
-def update_job_skip(row_id: str, reason: str) -> None:
+def update_job_na(row_id: str, reason: str) -> None:
     table = get_result_table()
     payload = _fit_payload_to_column_limits(
         table=table,
         values={
-            "STATUS": "SKIP",
-            "LOG": f"SKIP reason={reason}",
+            "STATUS": "NA",
+            "LOG": f"NA reason={reason}",
         },
     )
     query = f"""

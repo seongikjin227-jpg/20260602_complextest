@@ -21,7 +21,7 @@ class SqlTuningAgent:
     def __init__(self) -> None:
         self._agent = _SqlTuningAgent()
 
-    def process_job(self, job) -> None:
+    def process_job(self, job) -> str:
         """SQL 튜닝 작업 1건을 처리합니다."""
         job_key = f"{job.space_nm}.{job.sql_id}"
         state = None
@@ -54,6 +54,7 @@ class SqlTuningAgent:
                 final_log=final_log,
             )
             logger.info(f"[SqlTuningAgent] {job_key} 튜닝 완료 (Status: {final_status})")
+            return final_status
 
         except Exception as exc:
             logger.error(f"[SqlTuningAgent] {job_key} 처리 오류: {exc}")
@@ -62,3 +63,4 @@ class SqlTuningAgent:
                 str(exc),
                 tuned_sql=state.tuned_sql if state and state.tuned_sql else None,
             )
+            return "FAIL"

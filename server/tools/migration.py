@@ -15,8 +15,8 @@ def run_data_migration(map_id: int) -> str:
     started = time.perf_counter()
     try:
         callbacks["mig_inc"](map_id)
-        callbacks["mig_proc"](job)
-        record_agent_run("DB_MIGRATION", time.perf_counter() - started, "SUCCESS")
+        final_status = callbacks["mig_proc"](job)
+        record_agent_run("DB_MIGRATION", time.perf_counter() - started, final_status)
         if logger:
             logger.info(f"[DataMigrationTool] map_id={map_id} 완료")
         return f"DataMigration map_id={map_id} 완료"

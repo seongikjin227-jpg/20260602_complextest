@@ -15,8 +15,8 @@ def run_sql_conversion(row_id: str) -> str:
     started = time.perf_counter()
     try:
         callbacks["sql_inc"](row_id)
-        callbacks["sql_proc"](job)
-        record_agent_run("SQL_MIGRATION", time.perf_counter() - started, "SUCCESS")
+        final_status = callbacks["sql_proc"](job)
+        record_agent_run("SQL_MIGRATION", time.perf_counter() - started, final_status)
         if logger:
             logger.info(f"[SqlConversionTool] row_id={row_id} 완료")
         return f"SqlConversion row_id={row_id} 완료"

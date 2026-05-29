@@ -27,6 +27,6 @@ class SqlConversionAgent:
             tuning_agent=SqlTuningAgent(max_iterations=0),
         )
 
-    def process_job(self, job) -> None:
+    def process_job(self, job) -> str:
         """SQL 변환 작업 1건을 처리합니다."""
-        self._coordinator.process_job(job)
+        return self._coordinator.process_job(job)

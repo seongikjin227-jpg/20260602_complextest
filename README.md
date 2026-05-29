@@ -280,6 +280,28 @@ server/tools/
 8. Test SQL 실행 결과의 `CASE_NO`, `FROM_COUNT`, `TO_COUNT`로 검증합니다.
 9. 통과하면 `PASS`, 실패하면 retry 또는 `FAIL`로 처리합니다.
 
+### SQL job status
+
+`NEXT_SQL_INFO.STATUS` polling target:
+
+- Included: `URGENT`, `FAIL`, `READY`, `PENDING`, `SKIP`, `NULL`
+- Excluded: `NA`
+
+`SKIP` is treated as a retryable hold status. The scheduler can pick it up again when mapping readiness changes.
+Use `NA` for SQL rows that must be excluded from conversion/test targets entirely.
+
+### SQL append-only log
+
+`NEXT_SQL_INFO.LOG` stores the latest summary for the row. Detailed generation/execution history is append-only in `NEXT_SQL_LOG`.
+
+Create or update the table with:
+
+```bash
+python scripts/create_sql_log_table.py
+```
+
+`NEXT_SQL_LOG` stores generated intermediate retry SQL and execution/error status with `SPACE_NM`, `SQL_ID`, `SQL_KIND`, `SQL_CONTENT`, `STATUS`, `PROMPT_NAME`, `MODEL_NAME`, `BATCH_NO`, `CYCLE_NO`, `ELAPSED_SECONDS`, `ATTEMPT_NO`, `STAGE_NAME`, and `ERROR_MESSAGE`.
+
 ## Correct SQL RAG hint
 
 TO-BE, Bind, Test SQL 생성 단계는 과거에 사람이 고친 correct SQL을 hint로 받을 수 있습니다.

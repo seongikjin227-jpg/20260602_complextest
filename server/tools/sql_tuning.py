@@ -17,8 +17,8 @@ def run_sql_tuning(row_ids: list) -> str:
         started = time.perf_counter()
         try:
             callbacks["sql_inc"](row_id)
-            callbacks["tune_proc"](job)
-            record_agent_run("SQL_TUNING", time.perf_counter() - started, "SUCCESS")
+            final_status = callbacks["tune_proc"](job)
+            record_agent_run("SQL_TUNING", time.perf_counter() - started, final_status)
             results.append(f"row_id={row_id} 완료")
         except Exception as exc:
             record_agent_run("SQL_TUNING", time.perf_counter() - started, "FAIL")

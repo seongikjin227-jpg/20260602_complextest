@@ -190,8 +190,9 @@ def _call_llm(chat_messages: list[dict]) -> str:
 
 # ── 오른쪽 상태 패널 ───────────────────────────────────────────────────────────
 _ICON = {"PASS": "✅", "FAIL": "❌", "RUNNING": "🔄", "READY": "🔵",
-         "SKIP": "⏭️", "NULL": "⚫", "PENDING": "🟣"}
+         "SKIP": "⏭️", "NA": "🚫", "NULL": "⚫", "PENDING": "🟣"}
 _CLR  = {"PASS": "badge-pass", "FAIL": "badge-fail"}
+_STATUS_ORDER = ["PASS", "FAIL", "RUNNING", "READY", "SKIP", "NA", "PENDING", "NULL"]
 
 def _status_card(title: str, summary: dict):
     if not summary:
@@ -204,8 +205,7 @@ def _status_card(title: str, summary: dict):
     total = sum(summary.values())
     rows  = ""
     for k, v in sorted(summary.items(),
-                       key=lambda x: ["PASS","FAIL","RUNNING","READY","SKIP","PENDING","NULL"].index(x[0])
-                       if x[0] in ["PASS","FAIL","RUNNING","READY","SKIP","PENDING","NULL"] else 99):
+                       key=lambda x: _STATUS_ORDER.index(x[0]) if x[0] in _STATUS_ORDER else 99):
         icon  = _ICON.get(k, "◻️")
         cls   = _CLR.get(k, "badge-etc")
         rows += f"""<div class="stat-row">

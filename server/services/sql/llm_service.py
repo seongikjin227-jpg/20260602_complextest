@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import time
 from datetime import date, datetime
 from pathlib import Path
 from typing import Iterable
@@ -11,6 +12,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from server.core.exceptions import LLMRateLimitError
+from server.repositories.sql.log_repository import insert_sql_log
 from server.services.sql.domain_models import MappingRuleItem, SqlInfoJob
 from server.services.sql.prompt_service import build_prompt_messages
 from server.services.sql.correct_sql_rag_service import correct_sql_hint_rag_service
@@ -240,6 +242,55 @@ def _build_sql_messages(template_name: str, **payload: str) -> list[dict[str, st
     return build_prompt_messages(template_name, **payload)
 
 
+def _call_llm_for_job(
+    *,
+    job: SqlInfoJob | None,
+    sql_kind: str,
+    prompt_name: str,
+    messages: list[dict[str, str]],
+    last_error: str | None = None,
+    stage_name: str | None = None,
+) -> str:
+    started = time.perf_counter()
+    try:
+        sql_text = call_llm_api(
+            api_key=None,
+            model=None,
+            base_url=None,
+            messages=messages,
+        )
+        insert_sql_log(
+            space_nm=job.space_nm if job else None,
+            sql_id=job.sql_id if job else None,
+            sql_info_rowid=job.row_id if job else None,
+            sql_kind=sql_kind,
+            sql_content=sql_text,
+            status="SUCCESS",
+            prompt_name=prompt_name,
+            model_name=_model_name(),
+            elapsed_seconds=time.perf_counter() - started,
+            attempt_no=_attempt_no(last_error),
+            stage_name=stage_name or f"GENERATE_{sql_kind}",
+        )
+        return sql_text
+    except Exception as exc:
+        insert_sql_log(
+            space_nm=job.space_nm if job else None,
+            sql_id=job.sql_id if job else None,
+            sql_info_rowid=job.row_id if job else None,
+            sql_kind=sql_kind,
+            sql_content=None,
+            status="FAIL",
+            prompt_name=prompt_name,
+            model_name=_model_name(),
+            elapsed_seconds=time.perf_counter() - started,
+            attempt_no=_attempt_no(last_error),
+            stage_name=stage_name or f"GENERATE_{sql_kind}",
+            error_message=str(exc),
+        )
+        raise
+
+
 def _extract_sql_text(response_text: str) -> str:
     text = response_text.strip()
     code_block_match = re.search(r"```(?:sql)?\s*(.*?)```", text, re.IGNORECASE | re.DOTALL)
@@ -419,18 +470,20 @@ def generate_tobe_sql(
     mapping_rules: list[MappingRuleItem],
     last_error: str | None = None,
 ) -> str:
+    template_name = "tobe_sql_prompt.json"
     scoped_rules = _select_mapping_rules_for_job(job=job, mapping_rules=mapping_rules)
     correct_sql_hints = correct_sql_hint_rag_service.retrieve_correct_sql_hints(
         sql_text=job.source_sql,
         correct_kind="TOBE",
         current_row_id=job.row_id,
     )
-    return call_llm_api(
-        api_key=None,
-        model=None,
-        base_url=None,
+    return _call_llm_for_job(
+        job=job,
+        sql_kind="TOBE_SQL",
+        prompt_name=template_name,
+        last_error=last_error,
         messages=_build_sql_messages(
-            "tobe_sql_prompt.json",
+            template_name,
             from_sql=job.source_sql,
             mapping_schema_text=_serialize_mapping_rules(scoped_rules),
             target_schema=_schema_env("ORACLE_SCHEMA_TGT") or "UNKNOWN",
@@ -445,12 +498,14 @@ def generate_bind_tuned_sql(
     job: SqlInfoJob,
     last_error: str | None = None,
 ) -> str:
-    return call_llm_api(
-        api_key=None,
-        model=None,
-        base_url=None,
+    template_name = "bind_tuned_sql_prompt.json"
+    return _call_llm_for_job(
+        job=job,
+        sql_kind="BIND_TUNED_SQL",
+        prompt_name=template_name,
+        last_error=last_error,
         messages=_build_sql_messages(
-            "bind_tuned_sql_prompt.json",
+            template_name,
             from_sql=job.source_sql,
             from_schema=_schema_env("ORACLE_SCHEMA_SRC") or "UNKNOWN",
             last_error=last_error or "None",
@@ -469,10 +524,11 @@ def generate_bind_sql(
         correct_kind="BIND",
         current_row_id=job.row_id,
     )
-    return call_llm_api(
-        api_key=None,
-        model=None,
-        base_url=None,
+    return _call_llm_for_job(
+        job=job,
+        sql_kind="BIND_SQL",
+        prompt_name=template_name,
+        last_error=last_error,
         messages=_build_sql_messages(
             template_name,
             from_sql=source_sql,
@@ -487,13 +543,16 @@ def tune_tobe_sql(
     current_tobe_sql: str,
     tuning_examples: list[dict[str, str]] | None = None,
     last_error: str | None = None,
+    job: SqlInfoJob | None = None,
 ) -> str:
-    return call_llm_api(
-        api_key=None,
-        model=None,
-        base_url=None,
+    template_name = "tobe_sql_tuning_prompt.json"
+    return _call_llm_for_job(
+        job=job,
+        sql_kind="TUNED_SQL",
+        prompt_name=template_name,
+        last_error=last_error,
         messages=_build_sql_messages(
-            "tobe_sql_tuning_prompt.json",
+            template_name,
             current_tobe_sql=current_tobe_sql,
             universal_tuning_rules=json.dumps(
                 tobe_sql_tuning_service.load_universal_tuning_rules(),
@@ -522,6 +581,20 @@ def _schema_env(name: str) -> str:
     return (os.getenv(name) or "").strip().upper()
 
 
+def _model_name() -> str:
+    return (os.getenv("LLM_MODEL") or "").strip()
+
+
+def _attempt_no(last_error: str | None) -> int | None:
+    match = re.search(r"\battempt\s*=\s*(\d+)\s*/\s*\d+", last_error or "", re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except Exception:
+        return None
+
+
 def _is_final_retry_mode(last_error: str | None) -> bool:
     text = (last_error or "").upper()
     return "FINAL_RETRY_MODE=ON" in text or "ATTEMPT=3/3" in text
@@ -537,12 +610,15 @@ def _generate_validation_test_sql(
     last_error: str | None = None,
     final_retry_mode: bool = False,
     correct_sql_hint_json: str = "[]",
+    job: SqlInfoJob | None = None,
+    sql_kind: str = "TEST_SQL",
 ) -> str:
     template_name = "test_sql_final_retry_prompt.json" if final_retry_mode else "test_sql_prompt.json"
-    return call_llm_api(
-        api_key=None,
-        model=None,
-        base_url=None,
+    return _call_llm_for_job(
+        job=job,
+        sql_kind=sql_kind,
+        prompt_name=template_name,
+        last_error=last_error,
         messages=_build_sql_messages(
             template_name,
             source_sql=source_sql,
@@ -578,6 +654,8 @@ def generate_test_sql(
         last_error=last_error,
         final_retry_mode=_is_final_retry_mode(last_error),
         correct_sql_hint_json=serialize_correct_sql_hints_for_prompt(correct_sql_hints),
+        job=job,
+        sql_kind="TEST_SQL",
     )
 
 
@@ -586,6 +664,7 @@ def generate_sql_comparison_test_sql(
     candidate_sql: str,
     bind_set_json: str | None = None,
     last_error: str | None = None,
+    job: SqlInfoJob | None = None,
 ) -> str:
     target_schema = _schema_env("ORACLE_SCHEMA_TGT")
     return _generate_validation_test_sql(
@@ -597,4 +676,6 @@ def generate_sql_comparison_test_sql(
         comparison_mode="TARGET_TO_TARGET",
         last_error=last_error,
         correct_sql_hint_json="[]",
+        job=job,
+        sql_kind="TUNED_TEST_SQL",
     )

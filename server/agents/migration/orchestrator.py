@@ -9,7 +9,7 @@ class MigrationOrchestrator:
     def __init__(self):
         self.mig_kind = os.getenv("MIG_KIND", "DB_MIG")
 
-    def process_job(self, NEXT_SQL_INFO):
+    def process_job(self, NEXT_SQL_INFO) -> str:
         logger.info(f"\n==========================================")
         logger.info(f"[JOB_START] 대상 작업(map_id={NEXT_SQL_INFO.map_id}) 프로세스 시작 (LangGraph)")
 
@@ -40,14 +40,15 @@ class MigrationOrchestrator:
             status = final_state.get("status", "UNKNOWN")
             elapsed = final_state.get("elapsed_time", 0)
             logger.info(f"[JOB_DONE] map_id={NEXT_SQL_INFO.map_id} | 최종 상태: {status} | 소요시간: {elapsed}초")
+            return status
 
         except BatchAbortError as abort_err:
             logger.critical(f"[Orchestrator] map_id={NEXT_SQL_INFO.map_id} | 치명적 배치 중단 요청 접수: {abort_err}")
             raise abort_err
         except Exception as e:
             logger.error(f"[Orchestrator] map_id={NEXT_SQL_INFO.map_id} | 치명적 크래시 발생: {str(e)}", exc_info=True)
-
             from server.repositories.migration.repository import update_job_status
             update_job_status(NEXT_SQL_INFO.map_id, "FAIL", 0, 0)
 
             logger.warning(f"[Orchestrator] map_id={NEXT_SQL_INFO.map_id} | 크래시로 인한 강제 FAIL 처리 완료.")
+            return "FAIL"
