@@ -51,17 +51,12 @@ class TobeSqlTuningService:
             )
             payloads = [self._build_lexical_match_payload(block, rules) for block in ordered_blocks]
 
-        self._increment_rule_hit_counts(self._extract_prompt_rule_ids(payloads), expected_rule_type="SEARCH")
         return payloads
 
     def load_universal_tuning_rules(self) -> list[dict[str, Any]]:
         try:
             rules = self._load_universal_from_db()
             if rules:
-                self._increment_rule_hit_counts(
-                    [str(rule.get("rule_id", "")).strip() for rule in rules],
-                    expected_rule_type="GENERAL",
-                )
                 return rules
         except Exception as exc:
             logger.warning(
@@ -211,6 +206,11 @@ class TobeSqlTuningService:
                 f"[TobeSqlTuningService] failed to increment rule HIT_CNT "
                 f"({type(exc).__name__}: {exc})"
             )
+
+    def increment_rule_hit_counts_for_success(self, tuning_examples: list[dict[str, Any]]) -> None:
+        """Increment each SEARCH rule once after a tuning prompt succeeds validation."""
+        unique_rule_ids = sorted(set(self._extract_prompt_rule_ids(tuning_examples)))
+        self._increment_rule_hit_counts(unique_rule_ids, expected_rule_type="SEARCH")
 
     def _embed_texts(self, texts: list[str]) -> list[list[float]]:
         endpoint = self._embedding_endpoint(self.embed_base_url)

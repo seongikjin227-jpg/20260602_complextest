@@ -16,8 +16,12 @@ from langgraph.graph import END, StateGraph
 from server.agents.supervisor.state import SupervisorState
 import server.tools as supervisor_tools
 
-# .env 또는 환경변수에 SQL_CONVERSION_ONLY=true 설정 시 SQL 변환만 실행
+# SQL_TUNING_ONLY takes precedence if both flags are enabled.
 _SQL_CONVERSION_ONLY = os.getenv("SQL_CONVERSION_ONLY", "false").lower() == "true"
+_SQL_TUNING_ONLY = os.getenv("SQL_TUNING_ONLY", "false").lower() == "true"
+_RUN_MIGRATION = not _SQL_CONVERSION_ONLY and not _SQL_TUNING_ONLY
+_RUN_SQL_CONVERSION = not _SQL_TUNING_ONLY
+_RUN_SQL_TUNING = _SQL_TUNING_ONLY or not _SQL_CONVERSION_ONLY
 
 _RUNTIME_DIR = Path(__file__).resolve().parent.parent.parent.parent / "runtime"
 PAUSE_FLAG = _RUNTIME_DIR / "agent.pause"
@@ -67,14 +71,15 @@ def build_supervisor_graph(
         supervisor_tools.start_cycle_metrics(cycle)
 
         mig_jobs, sql_jobs, tuning_jobs = [], [], []
-        if not _SQL_CONVERSION_ONLY:
+        if _RUN_MIGRATION:
             try:
                 mig_jobs = get_migration_jobs()
             except Exception as exc:
                 logger.error(f"[Supervisor] DataMigration polling error: {exc}")
         try:
-            sql_jobs = get_sql_jobs()
-            if not _SQL_CONVERSION_ONLY:
+            if _RUN_SQL_CONVERSION:
+                sql_jobs = get_sql_jobs()
+            if _RUN_SQL_TUNING:
                 tuning_jobs = get_tuning_jobs()
         except Exception as exc:
             logger.error(f"[Supervisor] SQL/Tuning polling error: {exc}")
@@ -119,7 +124,7 @@ def build_supervisor_graph(
 
         logger.info("[Supervisor] 작업 실행 시작")
 
-        if not _SQL_CONVERSION_ONLY:
+        if _RUN_MIGRATION:
             for job in list(mig_registry.values()):
                 retry = getattr(job, "retry_count", 0) or 0
                 if retry >= 3:
@@ -130,10 +135,11 @@ def build_supervisor_graph(
                     continue
                 supervisor_tools.run_data_migration.invoke({"map_id": job.map_id})
 
-        for job in list(sql_registry.values()):
-            supervisor_tools.run_sql_conversion.invoke({"row_id": str(job.row_id)})
+        if _RUN_SQL_CONVERSION:
+            for job in list(sql_registry.values()):
+                supervisor_tools.run_sql_conversion.invoke({"row_id": str(job.row_id)})
 
-        if not _SQL_CONVERSION_ONLY:
+        if _RUN_SQL_TUNING:
             tuning_row_ids = [str(job.row_id) for job in tuning_registry.values()]
             if tuning_row_ids:
                 supervisor_tools.run_sql_tuning.invoke({"row_ids": tuning_row_ids})

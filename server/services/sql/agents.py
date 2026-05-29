@@ -294,6 +294,7 @@ class SqlTuningAgent:
         state.tuned_sql = current_sql
         self._run_tuned_sql_validation(state)
         if state.tuned_test == "PASS":
+            tobe_sql_tuning_service.increment_rule_hit_counts_for_success(state.tuning_examples)
             state.formatted_sql = generate_formatted_sql(
                 job=state.job,
                 input_sql=state.tuned_sql or state.tobe_sql,
