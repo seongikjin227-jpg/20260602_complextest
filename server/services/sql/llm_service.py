@@ -12,6 +12,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from server.core.exceptions import LLMRateLimitError
+from server.core.llm_fallback import is_model_fallback_error, model_candidates, set_active_model
+from server.core.logger import logger
 from server.repositories.sql.log_repository import insert_sql_log
 from server.services.sql.domain_models import MappingRuleItem, SqlInfoJob
 from server.services.sql.prompt_service import build_prompt_messages
@@ -589,43 +591,60 @@ def call_llm_text_api(
     messages: list[dict[str, str]],
     provider: str | None = None,
 ) -> str:
-    resolved_api_key = _env_or_value(api_key, "LLM_API_KEY")
+    resolved_api_key = api_key or os.getenv("OPEN_API_KEY") or os.getenv("LLM_API_KEY")
+    if not resolved_api_key:
+        raise ValueError("Required environment variable 'OPEN_API_KEY' or 'LLM_API_KEY' is not set.")
     resolved_model = _env_or_value(model, "LLM_MODEL")
     raw_base_url = _env_or_value(base_url, "LLM_BASE_URL")
-    resolved_provider = _resolve_llm_provider(provider=provider, base_url=raw_base_url, model=resolved_model)
+    candidates = model_candidates(resolved_model)
+    last_exc: Exception | None = None
 
-    try:
-        if resolved_provider == "anthropic":
-            llm = ChatAnthropic(
-                api_key=resolved_api_key,
-                model_name=resolved_model,
-                anthropic_api_url=_normalize_anthropic_base_url(raw_base_url),
-                max_tokens_to_sample=int(os.getenv("LLM_MAX_TOKENS", "4096")),
-                temperature=0,
-            )
-            safe_messages = _ensure_anthropic_message_requirements(messages)
-        else:
-            llm = ChatOpenAI(
-                api_key=resolved_api_key,
-                model=resolved_model,
-                base_url=_normalize_openai_base_url(raw_base_url),
-                temperature=0,
-            )
-            safe_messages = list(messages or [])
+    for idx, candidate_model in enumerate(candidates):
+        resolved_provider = _resolve_llm_provider(provider=provider, base_url=raw_base_url, model=candidate_model)
+        try:
+            if resolved_provider == "anthropic":
+                llm = ChatAnthropic(
+                    api_key=resolved_api_key,
+                    model_name=candidate_model,
+                    anthropic_api_url=_normalize_anthropic_base_url(raw_base_url),
+                    max_tokens_to_sample=int(os.getenv("LLM_MAX_TOKENS", "4096")),
+                    temperature=0,
+                )
+                safe_messages = _ensure_anthropic_message_requirements(messages)
+            else:
+                llm = ChatOpenAI(
+                    api_key=resolved_api_key,
+                    model=candidate_model,
+                    base_url=_normalize_openai_base_url(raw_base_url),
+                    temperature=0,
+                )
+                safe_messages = list(messages or [])
 
-        response = llm.invoke(_to_langchain_messages(safe_messages))
-        content = getattr(response, "content", response)
-        if isinstance(content, list):
-            text = "".join(item.get("text", "") if isinstance(item, dict) else str(item) for item in content)
-        else:
-            text = str(content)
-        return text
-    except Exception as exc:
-        message = str(exc)
-        lowered = message.lower()
-        if "429" in message or "rate limit" in lowered or "504" in message or "gateway timeout" in lowered or "timed out" in lowered:
-            raise LLMRateLimitError(message) from exc
-        raise
+            response = llm.invoke(_to_langchain_messages(safe_messages))
+            content = getattr(response, "content", response)
+            if isinstance(content, list):
+                text = "".join(item.get("text", "") if isinstance(item, dict) else str(item) for item in content)
+            else:
+                text = str(content)
+            set_active_model(candidate_model)
+            return text
+        except Exception as exc:
+            message = str(exc)
+            lowered = message.lower()
+            if "429" in message or "rate limit" in lowered or "504" in message or "gateway timeout" in lowered or "timed out" in lowered:
+                raise LLMRateLimitError(message) from exc
+            if idx < len(candidates) - 1 and is_model_fallback_error(message):
+                logger.warning(
+                    f"[LLM] model fallback: {candidate_model} failed ({message}); "
+                    f"trying {candidates[idx + 1]}"
+                )
+                last_exc = exc
+                continue
+            raise
+
+    if last_exc:
+        raise last_exc
+    raise ValueError("No LLM model candidates are configured.")
 
 
 def generate_tobe_sql(

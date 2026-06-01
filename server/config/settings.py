@@ -23,7 +23,7 @@ ORACLE_CLIENT_PATH  = os.getenv("ORACLE_CLIENT_PATH", "")
 LLM_PROVIDER    = os.getenv("LLM_PROVIDER", "openai").strip().lower()
 LLM_API_KEY     = (os.getenv("OPEN_API_KEY") or os.getenv("LLM_API_KEY") or "")
 LLM_BASE_URL    = os.getenv("LLM_BASE_URL", "")
-LLM_MODEL       = os.getenv("LLM_MODEL", "gpt-4o-mini")
+LLM_MODEL       = os.getenv("LLM_MODEL", "GLM-5.1")
 LLM_MAX_TOKENS  = int(os.getenv("LLM_MAX_TOKENS", "4096"))
 
 # ── DB 테이블명 ───────────────────────────────────────────────────────────────

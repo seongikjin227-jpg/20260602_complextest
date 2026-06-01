@@ -185,7 +185,7 @@ def _system_prompt() -> str:
 def _call_llm(chat_messages: list[dict]) -> str:
     api_key  = os.getenv("OPEN_API_KEY") or os.getenv("LLM_API_KEY", "")
     base_url = os.getenv("LLM_BASE_URL",  "")
-    model    = os.getenv("LLM_MODEL", "gpt-4o-mini")
+    model    = os.getenv("LLM_MODEL", "GLM-5.1")
     client   = OpenAI(api_key=api_key, base_url=base_url)
 
     # 마지막 유저 메시지에서 MAP_ID 감지 → DB 로그 컨텍스트 추가
@@ -217,21 +217,39 @@ def _pct(numerator: int, denominator: int) -> str:
         return "-"
     return f"{(numerator / denominator) * 100:.1f}%"
 
-def _rate_html(summary: dict) -> str:
+def _sum_excluding(normalized: dict[str, int], excluded: set[str]) -> int:
+    return sum(v for k, v in normalized.items() if k not in excluded)
+
+def _rate_bases(title: str, normalized: dict[str, int]) -> tuple[int, int]:
+    if "Tuning" in title:
+        return (
+            _sum_excluding(normalized, {"NA"}),
+            _sum_excluding(normalized, {"NULL", "SKIP"}),
+        )
+    if "SQL" in title:
+        return (
+            _sum_excluding(normalized, {"NA"}),
+            _sum_excluding(normalized, {"NA", "SKIP"}),
+        )
+    return (
+        sum(normalized.values()),
+        _sum_excluding(normalized, _SUCCESS_EXCLUDED),
+    )
+
+def _rate_html(title: str, summary: dict) -> str:
     normalized: dict[str, int] = {}
     for k, v in summary.items():
         normalized[_norm_status(k)] = normalized.get(_norm_status(k), 0) + int(v or 0)
 
-    total = sum(normalized.values())
     pass_count = normalized.get("PASS", 0)
-    success_base = sum(v for k, v in normalized.items() if k not in _SUCCESS_EXCLUDED)
+    progress_base, success_base = _rate_bases(title, normalized)
 
     return f"""
       <div class="rate-grid">
         <div class="rate-box">
           <div class="rate-label">진척률</div>
-          <div class="rate-value">{_pct(pass_count, total)}</div>
-          <div class="rate-sub">{pass_count}/{total}건</div>
+          <div class="rate-value">{_pct(pass_count, progress_base)}</div>
+          <div class="rate-sub">{pass_count}/{progress_base}건</div>
         </div>
         <div class="rate-box">
           <div class="rate-label">성공률</div>
@@ -262,7 +280,7 @@ def _status_card(title: str, summary: dict):
     st.markdown(f"""
     <div class="stat-card">
       <div class="stat-card-title">{title} &nbsp;<span style="font-weight:400;color:#adb5bd">총 {total}건</span></div>
-      {_rate_html(summary)}
+      {_rate_html(title, summary)}
       {rows}
     </div>""", unsafe_allow_html=True)
 

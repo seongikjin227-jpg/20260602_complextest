@@ -9,6 +9,7 @@ from server.core.exceptions import (
     LLMConnectionError, LLMAuthenticationError,
     LLMRateLimitError, LLMInvalidRequestError, LLMServerError
 )
+from server.core.llm_fallback import is_model_fallback_error, model_candidates, set_active_model
 from server.core.logger import logger
 from server.services.migration.prompt_service import build_migration_prompt
 from server.services.sql.db_runtime import qualify_fr_table, qualify_to_table
@@ -107,7 +108,7 @@ def generate_sqls(NEXT_SQL_INFO, last_error=None, last_sql=None, source_ddl=None
     (DDL, Migration, Verification 분리)
     """
     client = get_client()
-    model_name = os.getenv("LLM_MODEL") or "gpt-4o-mini"
+    model_name = os.getenv("LLM_MODEL") or "GLM-5.1"
 
     from_table = qualify_fr_table(NEXT_SQL_INFO.fr_table)
     to_table = qualify_to_table(NEXT_SQL_INFO.to_table)
@@ -161,25 +162,45 @@ def generate_sqls(NEXT_SQL_INFO, last_error=None, last_sql=None, source_ddl=None
 
     try:
         logger.debug(f"[LLM_PROMPT] map_id={NEXT_SQL_INFO.map_id}\n{'='*60}\n{prompt}\n{'='*60}")
-        if _resolve_llm_provider() == "anthropic":
-            response = client.messages.create(
-                model=model_name,
-                max_tokens=int(os.getenv("LLM_MAX_TOKENS", "4096")),
-                temperature=0,
-                system=system_anthropic,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            result = _extract_json_object(_extract_anthropic_text(response))
-        else:
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": system_openai},
-                    {"role": "user", "content": prompt}
-                ],
-                response_format={"type": "json_object"}
-            )
-            result = json.loads(response.choices[0].message.content)
+        result = None
+        used_model = model_name
+        candidates = model_candidates(model_name)
+        for idx, candidate_model in enumerate(candidates):
+            try:
+                if _resolve_llm_provider() == "anthropic":
+                    response = client.messages.create(
+                        model=candidate_model,
+                        max_tokens=int(os.getenv("LLM_MAX_TOKENS", "4096")),
+                        temperature=0,
+                        system=system_anthropic,
+                        messages=[{"role": "user", "content": prompt}],
+                    )
+                    result = _extract_json_object(_extract_anthropic_text(response))
+                else:
+                    response = client.chat.completions.create(
+                        model=candidate_model,
+                        messages=[
+                            {"role": "system", "content": system_openai},
+                            {"role": "user", "content": prompt}
+                        ],
+                        response_format={"type": "json_object"}
+                    )
+                    result = json.loads(response.choices[0].message.content)
+                used_model = candidate_model
+                set_active_model(candidate_model)
+                break
+            except Exception as exc:
+                message = str(exc)
+                if idx < len(candidates) - 1 and is_model_fallback_error(message):
+                    logger.warning(
+                        f"[LLM] model fallback: {candidate_model} failed ({message}); "
+                        f"trying {candidates[idx + 1]}"
+                    )
+                    continue
+                raise
+
+        if result is None:
+            raise LLMConnectionError("No LLM model candidates are configured.")
 
         ddl_sql = result.get("ddl_sql", "")
         migration_sql = result.get("migration_sql", "")
@@ -192,7 +213,7 @@ def generate_sqls(NEXT_SQL_INFO, last_error=None, last_sql=None, source_ddl=None
                 return "\n/\n".join(str_list)
             return val
 
-        logger.info(f"[LLM] SQL 생성 완료 (Model: {model_name})")
+        logger.info(f"[LLM] SQL 생성 완료 (Model: {used_model})")
         return (
             merge_list(ddl_sql),
             merge_list(migration_sql),

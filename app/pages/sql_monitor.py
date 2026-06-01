@@ -65,6 +65,13 @@ def render():
 
     detail = get_sql_job_full(sel_row_id) or row
 
+    with st.expander("📋 로그", expanded=True):
+        log = detail.get("LOG") or ""
+        if log:
+            st.text_area("LOG", log, height=200, label_visibility="collapsed")
+        else:
+            st.info("로그 없음")
+
     origin_sql = detail.get("EDIT_FR_SQL") or detail.get("FR_SQL_TEXT") or "(없음)"
     bind_sql = detail.get("BIND_SQL") or "(없음)"
     test_sql = detail.get("TEST_SQL") or "(없음)"
@@ -80,10 +87,3 @@ def render():
     with col3:
         st.caption("TEST_SQL")
         st.code(test_sql, language="sql")
-
-    with st.expander("📋 로그"):
-        log = detail.get("LOG") or ""
-        if log:
-            st.text_area("LOG", log, height=200, label_visibility="collapsed")
-        else:
-            st.info("로그 없음")

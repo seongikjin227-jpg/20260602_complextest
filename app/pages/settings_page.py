@@ -2,6 +2,9 @@ import streamlit as st
 from utils.env_manager import read_env, write_env_key
 
 _LLM_MODELS = [
+    "GLM-5.1",
+    "Qwen3.6-35B-A3B",
+    "Kimi-K2.5",
     "gemini-2.5-flash-lite",
     "gemini-2.5-flash",
     "gemini-2.0-flash",
@@ -20,7 +23,8 @@ def render():
     # ── LLM 설정 ──────────────────────────────────────────────────────────────
     st.subheader("🤖 LLM 설정")
 
-    current_model = env.get("LLM_MODEL", "")
+    current_model = env.get("LLM_MODEL", "GLM-5.1")
+    current_fallback_models = env.get("LLM_FALLBACK_MODELS", "GLM-5.1,Qwen3.6-35B-A3B,Kimi-K2.5")
     model_options = sorted(set(_LLM_MODELS + ([current_model] if current_model else [])))
 
     col1, col2 = st.columns(2)
@@ -31,6 +35,11 @@ def render():
             index=model_options.index(current_model) if current_model in model_options else 0,
         )
         custom_model = st.text_input("직접 입력 (우선 적용)", placeholder="예) gemini-2.5-pro")
+        fallback_models = st.text_input(
+            "Fallback 모델 목록",
+            value=current_fallback_models,
+            help="model not allow 등 치명적인 모델 오류가 발생하면 왼쪽부터 순서대로 시도합니다. timeout/rate limit에는 적용하지 않습니다.",
+        )
     with col2:
         api_key = st.text_input(
             "API Key (OPEN_API_KEY)",
@@ -45,8 +54,10 @@ def render():
     if st.button("LLM 설정 저장", type="primary"):
         final_model = custom_model.strip() if custom_model.strip() else sel_model
         write_env_key("LLM_MODEL", final_model)
+        write_env_key("LLM_FALLBACK_MODELS", fallback_models.strip())
         if api_key:
             write_env_key("OPEN_API_KEY", api_key)
+            write_env_key("LLM_API_KEY", api_key)
         if base_url:
             write_env_key("LLM_BASE_URL", base_url)
         st.success(f"저장 완료 → LLM_MODEL={final_model}")
