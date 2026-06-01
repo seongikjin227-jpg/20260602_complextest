@@ -9,7 +9,6 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Literal
 
 from langgraph.graph import END, StateGraph
 
@@ -33,6 +32,10 @@ _stop_event = threading.Event()
 
 def request_stop() -> None:
     _stop_event.set()
+
+
+def is_stop_requested() -> bool:
+    return _stop_event.is_set()
 
 
 def build_supervisor_graph(
@@ -169,11 +172,6 @@ def build_supervisor_graph(
             elapsed += step
         return {"stop_requested": _stop_event.is_set()}
 
-    def route_after_wait(state: SupervisorState) -> Literal["poll", "__end__"]:
-        if _stop_event.is_set() or state.get("stop_requested"):
-            return END
-        return "poll"
-
     workflow = StateGraph(SupervisorState)
 
     workflow.add_node("poll", poll_node)
@@ -183,10 +181,6 @@ def build_supervisor_graph(
     workflow.set_entry_point("poll")
     workflow.add_edge("poll", "execute")
     workflow.add_edge("execute", "wait")
-    workflow.add_conditional_edges(
-        "wait",
-        route_after_wait,
-        {"poll": "poll", END: END},
-    )
+    workflow.add_edge("wait", END)
 
     return workflow.compile()

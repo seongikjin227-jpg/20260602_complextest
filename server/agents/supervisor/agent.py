@@ -12,9 +12,8 @@ import os
 import signal
 from datetime import datetime
 
-from server.agents.supervisor.graph import build_supervisor_graph, request_stop
+from server.agents.supervisor.graph import build_supervisor_graph, is_stop_requested, request_stop
 from server.agents.supervisor.state import SupervisorState
-from server.config.settings import SUPERVISOR_RECURSION_LIMIT
 import server.tools as supervisor_tools
 
 logger = logging.getLogger("migration_agent")
@@ -67,7 +66,7 @@ class SupervisorAgent:
         supervisor_tools.start_batch_metrics(batch_no)
         logger.info(f"[Supervisor] Batch {batch_no} 시작")
 
-        initial_state: SupervisorState = {
+        state: SupervisorState = {
             "messages": [],
             "cycle": 0,
             "stop_requested": False,
@@ -75,10 +74,10 @@ class SupervisorAgent:
 
         stopped_normally = False
         try:
-            self._graph.invoke(
-                initial_state,
-                config={"recursion_limit": SUPERVISOR_RECURSION_LIMIT},
-            )
+            while not is_stop_requested():
+                state = self._graph.invoke(state)
+                if state.get("stop_requested"):
+                    break
             stopped_normally = True
         except (KeyboardInterrupt, SystemExit):
             stopped_normally = True
@@ -97,6 +96,7 @@ class SupervisorAgent:
 
         def _handle(_signum, _frame):
             signal_count["n"] += 1
+            logger.warning(f"[Supervisor] Stop signal received (signum={_signum}). Finishing current job...")
             request_stop()
             if signal_count["n"] == 1:
                 try:

@@ -15,7 +15,7 @@
         "tuned_result 값에는 적용한 튜닝 가이드를 한국어 자연어 1~2문장으로만 설명한다. SQL 문장은 넣지 않는다.",
         "SQL 의미, 테이블명, 컬럼명, Alias, JOIN 의미, MyBatis 동적 태그, #{{param}}/${{param}} 바인드 파라미터를 보존한다.",
         "universal_tuning_rules는 필수 튜닝 기준으로 우선 적용하고, searched_tuning_rule_block_rag_json은 현재 SQL과 관련 있을 때만 적용한다.",
-        "적용할 튜닝이 없으면 current_tobe_sql을 그대로 tuned_sql에 넣고, tuned_result에는 적용 가능한 튜닝 가이드가 없었다고 간단히 적는다."
+        "적용할 튜닝이 없으면 current_tobe_sql을 그대로 tuned_sql에 넣고, tuned_result에는 정확히 NO TUNING만 넣는다."
     ],
     "output_format": "{{\n  \"tuned_sql\": \"SELECT ...\",\n  \"tuned_result\": \"적용한 튜닝 가이드 요약 한두 문장\"\n}}",
     "user_instruction": "현재 SQL을 튜닝하고, tuned_sql에는 SQL만, tuned_result에는 한국어 자연어 설명만 넣어 JSON 객체 하나만 반환하라."

@@ -241,7 +241,7 @@ def get_tuning_jobs() -> list:
                TO_SQL_TEXT, {tuned_sql_column}, TUNED_TEST, BIND_SQL, BIND_SET, TEST_SQL, STATUS, LOG,
                UPD_TS, EDITED_YN, {fr_bindtuned_sql_column}, {select_correct_cols}, {sql_length_column}, {map_type_column}, {formatted_sql_column}, {tuned_result_column}
         FROM {table}
-        WHERE (TUNED_TEST IS NULL OR UPPER(TRIM(TUNED_TEST)) <> 'PASS')
+        WHERE (TUNED_TEST IS NULL OR UPPER(TRIM(TUNED_TEST)) NOT IN ('PASS', 'SKIP'))
           AND TO_SQL_TEXT IS NOT NULL
           AND UPPER(TRIM(STATUS)) = 'PASS'
           {batch_limit_clause}
