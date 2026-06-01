@@ -15,12 +15,15 @@ from langgraph.graph import END, StateGraph
 from server.agents.supervisor.state import SupervisorState
 import server.tools as supervisor_tools
 
-# SQL_TUNING_ONLY takes precedence if both flags are enabled.
+# If any *_ONLY flag is enabled, run the selected agents only.
+# If none are enabled, run the full pipeline.
+_DB_MIGRATION_ONLY = os.getenv("DB_MIGRATION_ONLY", "false").lower() == "true"
 _SQL_CONVERSION_ONLY = os.getenv("SQL_CONVERSION_ONLY", "false").lower() == "true"
 _SQL_TUNING_ONLY = os.getenv("SQL_TUNING_ONLY", "false").lower() == "true"
-_RUN_MIGRATION = not _SQL_CONVERSION_ONLY and not _SQL_TUNING_ONLY
-_RUN_SQL_CONVERSION = not _SQL_TUNING_ONLY
-_RUN_SQL_TUNING = _SQL_TUNING_ONLY or not _SQL_CONVERSION_ONLY
+_HAS_AGENT_SELECTION = _DB_MIGRATION_ONLY or _SQL_CONVERSION_ONLY or _SQL_TUNING_ONLY
+_RUN_MIGRATION = _DB_MIGRATION_ONLY or not _HAS_AGENT_SELECTION
+_RUN_SQL_CONVERSION = _SQL_CONVERSION_ONLY or not _HAS_AGENT_SELECTION
+_RUN_SQL_TUNING = _SQL_TUNING_ONLY or not _HAS_AGENT_SELECTION
 
 _RUNTIME_DIR = Path(__file__).resolve().parent.parent.parent.parent / "runtime"
 PAUSE_FLAG = _RUNTIME_DIR / "agent.pause"
@@ -36,6 +39,21 @@ def request_stop() -> None:
 
 def is_stop_requested() -> bool:
     return _stop_event.is_set()
+
+
+def _wait_while_paused(logger) -> bool:
+    """Return True when a stop was requested while paused."""
+    paused_logged = False
+    while PAUSE_FLAG.exists():
+        if _stop_event.is_set():
+            return True
+        if not paused_logged:
+            logger.info("[Supervisor] 일시정지 중... (runtime/agent.pause 감지)")
+            paused_logged = True
+        time.sleep(0.5)
+    if paused_logged:
+        logger.info("[Supervisor] 일시정지 해제, 재개합니다.")
+    return False
 
 
 def build_supervisor_graph(
@@ -66,6 +84,8 @@ def build_supervisor_graph(
     def poll_node(state: SupervisorState) -> dict:
         """Poll pending jobs and refresh current batch registries."""
         if _stop_event.is_set():
+            return {"stop_requested": True, "cycle": state.get("cycle", 0) + 1}
+        if _wait_while_paused(logger):
             return {"stop_requested": True, "cycle": state.get("cycle", 0) + 1}
 
         cycle = state.get("cycle", 0) + 1
@@ -129,6 +149,8 @@ def build_supervisor_graph(
 
         if _RUN_MIGRATION:
             for job in list(mig_registry.values()):
+                if _stop_event.is_set():
+                    break
                 retry = getattr(job, "retry_count", 0) or 0
                 if retry >= 3:
                     logger.warning(
@@ -140,10 +162,16 @@ def build_supervisor_graph(
 
         if _RUN_SQL_CONVERSION:
             for job in list(sql_registry.values()):
+                if _stop_event.is_set():
+                    break
                 supervisor_tools.run_sql_conversion.invoke({"row_id": str(job.row_id)})
 
         if _RUN_SQL_TUNING:
-            tuning_row_ids = [str(job.row_id) for job in tuning_registry.values()]
+            tuning_row_ids = []
+            for job in list(tuning_registry.values()):
+                if _stop_event.is_set():
+                    break
+                tuning_row_ids.append(str(job.row_id))
             if tuning_row_ids:
                 supervisor_tools.run_sql_tuning.invoke({"row_ids": tuning_row_ids})
 
@@ -152,16 +180,8 @@ def build_supervisor_graph(
     def wait_node(_state: SupervisorState) -> dict:
         """Flush metrics, respect pause flag, and wait before next poll."""
         supervisor_tools.finish_cycle_metrics(logger=logger)
-        paused_logged = False
-        while PAUSE_FLAG.exists():
-            if _stop_event.is_set():
-                return {"stop_requested": True}
-            if not paused_logged:
-                logger.info("[Supervisor] 일시정지 중... (runtime/agent.pause 감지)")
-                paused_logged = True
-            time.sleep(0.5)
-        if paused_logged:
-            logger.info("[Supervisor] 일시정지 해제, 재개합니다.")
+        if _wait_while_paused(logger):
+            return {"stop_requested": True}
 
         elapsed = 0.0
         step = 0.2

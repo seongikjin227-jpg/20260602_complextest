@@ -2,7 +2,6 @@ import time
 import os
 from server.core.logger import logger
 from server.agents.migration.graph import migration_graph, BIZ_MAX_ATTEMPTS
-from server.repositories.migration.repository import increment_batch_count
 from server.core.exceptions import BatchAbortError
 
 class MigrationOrchestrator:
@@ -12,8 +11,6 @@ class MigrationOrchestrator:
     def process_job(self, NEXT_SQL_INFO) -> str:
         logger.info(f"\n==========================================")
         logger.info(f"[JOB_START] 대상 작업(map_id={NEXT_SQL_INFO.map_id}) 프로세스 시작 (LangGraph)")
-
-        increment_batch_count(NEXT_SQL_INFO.map_id)
 
         initial_state = {
             "next_sql_info": NEXT_SQL_INFO,

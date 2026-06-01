@@ -171,12 +171,6 @@ def get_pending_jobs() -> list[SqlInfoJob]:
     formatted_sql_column = "FORMATTED_SQL" if "FORMATTED_SQL" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS FORMATTED_SQL"
     tuned_result_column = "TUNED_RESULT" if "TUNED_RESULT" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS TUNED_RESULT"
     batch_limit_clause = "AND NVL(BATCH_CNT, 0) < 30" if "BATCH_CNT" in available_columns else ""
-    tuning_job_exclusion_clause = (
-        "AND NOT (UPPER(TRIM(STATUS)) = 'PASS' AND TO_SQL_TEXT IS NOT NULL AND UPPER(TRIM(TUNED_TEST)) IN ('READY', 'FAIL'))"
-        if "TUNED_TEST" in available_columns
-        else ""
-    )
-
     pending_status_sql = ", ".join(f"'{status}'" for status in _PENDING_JOB_STATUSES)
     query = f"""
         SELECT ROWIDTOCHAR(ROWID) AS RID,
@@ -185,7 +179,7 @@ def get_pending_jobs() -> list[SqlInfoJob]:
                UPD_TS, EDITED_YN, {fr_bindtuned_sql_column}, {select_correct_cols}, {sql_length_column}, {map_type_column}, {formatted_sql_column}, {tuned_result_column}
         FROM {table}
         WHERE (UPPER(TRIM(STATUS)) IN ({pending_status_sql}) OR STATUS IS NULL)
-          {tuning_job_exclusion_clause}
+          AND (TO_SQL_TEXT IS NULL OR UPPER(TRIM(STATUS)) <> 'PASS')
           {batch_limit_clause}
         ORDER BY
           CASE

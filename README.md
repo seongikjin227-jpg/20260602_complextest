@@ -338,9 +338,21 @@ python scripts/add_sql_info_classification_columns.py
 
 Supervisor mode flags:
 
-- `SQL_CONVERSION_ONLY=true`: run SQL Conversion only. Data Migration and SQL Tuning are skipped.
-- `SQL_TUNING_ONLY=true`: run SQL Tuning only. Data Migration and SQL Conversion are skipped.
-- If both flags are true, `SQL_TUNING_ONLY` takes precedence.
+- `DB_MIGRATION_ONLY=true`: include DB Migration.
+- `SQL_CONVERSION_ONLY=true`: include SQL Conversion.
+- `SQL_TUNING_ONLY=true`: include SQL Tuning.
+- If all three flags are false, the Supervisor runs all agents.
+- If one or more flags are true, the Supervisor runs only the selected agents.
+- Examples:
+  - `DB_MIGRATION_ONLY=true`, `SQL_TUNING_ONLY=true`, `SQL_CONVERSION_ONLY=false`: run DB Migration and SQL Tuning only.
+  - all three flags `true`: run all three agents.
+
+Supervisor runtime behavior:
+
+- The Supervisor graph handles one cycle at a time: `poll -> execute -> wait -> END`.
+- `SupervisorAgent.run()` owns the long-running loop and invokes the graph again unless a stop signal is requested.
+- `runtime/agent.pause` is respected before polling and while waiting between cycles.
+- On `SIGINT`/`SIGTERM`, the current in-flight job is allowed to finish, then remaining jobs in the same cycle are skipped.
 
 SQL Conversion polling uses `NEXT_SQL_INFO.STATUS`:
 
@@ -348,11 +360,12 @@ SQL Conversion polling uses `NEXT_SQL_INFO.STATUS`:
 - Excluded: `NA`
 - Ordering: `URGENT` -> `READY` -> `FAIL` -> `SKIP` -> `PENDING` -> `NULL`, then `UPD_TS`, SQL length, `SPACE_NM`, `SQL_ID`.
 - `SKIP` is retryable. `NA` is excluded from conversion/test targets.
+- Rows that already have `STATUS='PASS'` and `TO_SQL_TEXT IS NOT NULL` are not conversion targets. Tuning is handled by the separate tuning queue.
 
 SQL Tuning polling uses `NEXT_SQL_INFO.TUNED_TEST` while requiring `STATUS='PASS'` and `TO_SQL_TEXT IS NOT NULL`:
 
-- Included: `URGENT`, `READY`, `FAIL`, `NULL`, and any non-`PASS` value
-- Excluded: `PASS`
+- Included: `URGENT`, `READY`, `FAIL`, `NULL`, and any value other than `PASS` or `SKIP`
+- Excluded: `PASS`, `SKIP`
 - Ordering: `URGENT` -> `READY` -> `FAIL` -> `NULL` -> other, then `UPD_TS`, `SPACE_NM`, `SQL_ID`.
 
 SELECT flow:
@@ -372,8 +385,8 @@ TO-BE SQL generation
   -> validation skip
   -> TO-BE tuning
   -> tuned SQL validation skip
-  -> TUNED_TEST='PASS'
-  -> rule HIT_CNT update and indent formatting
+  -> TUNED_TEST='SKIP'
+  -> indent formatting
 ```
 
 Tuning LLM output is required to be one JSON object:
@@ -387,6 +400,7 @@ Tuning LLM output is required to be one JSON object:
 
 - `TUNED_SQL` stores only `tuned_sql`.
 - `TUNED_RESULT` stores only `tuned_result`.
+- If there is no applicable tuning guide, `TUNED_RESULT` is stored as `NO TUNING`.
 - `FORMATTED_SQL` stores the final SQL after indent formatting.
 - `NEXT_SQL_LOG` stores generation history separately as `TUNED_SQL`, `TUNED_RESULT`, `TUNED_TEST_SQL`, `FORMATTED_SQL`, and other SQL kinds.
 
@@ -399,7 +413,7 @@ Tuning RAG prompt input is intentionally compact. The prompt receives only:
 
 `BLOCK_RAG_CONTENT` still stores the full retrieved RAG payload, including metadata such as search method, model, score, rule id, and block information.
 
-`NEXT_SQL_RULES.HIT_CNT` is updated only after the tuned result reaches `TUNED_TEST='PASS'`. Within one tuning prompt, duplicate SEARCH rule ids are counted once.
+`NEXT_SQL_RULES.HIT_CNT` is updated only after the tuned result reaches `TUNED_TEST='PASS'`. Non-SELECT rows with `TUNED_TEST='SKIP'` are formatted but do not increment rule hit counts. Within one tuning prompt, duplicate SEARCH rule ids are counted once.
 
 Required optional migration scripts for current SQL output columns:
 

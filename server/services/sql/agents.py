@@ -203,9 +203,10 @@ class TobeSqlGenerationAgent:
 
     def _prepare_bind_source_sql(self, state: JobExecutionState) -> str:
         original_sql = state.job.source_sql or ""
-        status = (state.job.status or "").strip().upper()
+        sql_length = (getattr(state.job, "sql_length", "") or "").strip().upper()
         min_length = max(0, settings.BIND_SQL_PRETUNING_MIN_LENGTH)
-        if not settings.BIND_SQL_PRETUNING_ENABLED or status != "FAIL" or len(original_sql) < min_length:
+        should_pretune = sql_length == "LONG" or len(original_sql) >= min_length
+        if not settings.BIND_SQL_PRETUNING_ENABLED or not should_pretune:
             return original_sql
 
         tuned_sql = generate_bind_tuned_sql(
@@ -215,7 +216,8 @@ class TobeSqlGenerationAgent:
         update_fr_bindtuned_sql(row_id=state.job.row_id, fr_bindtuned_sql=tuned_sql)
         logger.info(
             f"[{self.name}] ({state.job_key}) stage=BIND_TUNING applied "
-            f"(status={status}, original_len={len(original_sql)}, tuned_len={len(tuned_sql)})"
+            f"(sql_length={sql_length or 'UNKNOWN'}, original_len={len(original_sql)}, "
+            f"min_length={min_length}, tuned_len={len(tuned_sql)})"
         )
         return tuned_sql
 
