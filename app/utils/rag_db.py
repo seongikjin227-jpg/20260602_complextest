@@ -2,30 +2,73 @@
 from utils.db import get_connection, _s
 
 
-def _has_rule_type_column(cur) -> bool:
+def _has_column(cur, column_name: str) -> bool:
     cur.execute(
-        """
-        SELECT COUNT(*)
-        FROM USER_TAB_COLUMNS
-        WHERE TABLE_NAME = 'NEXT_SQL_RULES' AND COLUMN_NAME = 'RULE_TYPE'
-        """
+        "SELECT COUNT(*) FROM USER_TAB_COLUMNS "
+        "WHERE TABLE_NAME = 'NEXT_SQL_RULES' AND COLUMN_NAME = :1",
+        (column_name,),
     )
     return cur.fetchone()[0] > 0
+
+
+def _has_rule_type_column(cur) -> bool:
+    return _has_column(cur, "RULE_TYPE")
 
 
 def get_all_rules() -> list[dict]:
     with get_connection() as conn:
         cur = conn.cursor()
-        type_expr = "NVL(RULE_TYPE, 'SEARCH')" if _has_rule_type_column(cur) else "'SEARCH'"
+        type_expr = "NVL(RULE_TYPE, 'SEARCH')" if _has_column(cur, "RULE_TYPE") else "'SEARCH'"
+        hit_expr = "NVL(HIT_CNT, 0)" if _has_column(cur, "HIT_CNT") else "0"
         q = f"""
             SELECT RULE_ID, {type_expr} AS RULE_TYPE,
                    GUIDANCE, EXAMPLE_BAD_SQL, EXAMPLE_TUNED_SQL,
+                   {hit_expr} AS HIT_CNT,
                    TO_CHAR(CREATED_AT, 'YYYY-MM-DD HH24:MI:SS') AS CREATED_AT,
                    TO_CHAR(UPDATED_AT, 'YYYY-MM-DD HH24:MI:SS') AS UPDATED_AT
             FROM NEXT_SQL_RULES
             ORDER BY CREATED_AT ASC
         """
         cur.execute(q)
+        cols = [d[0] for d in cur.description]
+        return [{cols[i]: _s(row[i]) for i in range(len(cols))} for row in cur.fetchall()]
+
+
+def get_top_rules(limit: int = 5) -> list[dict]:
+    """Return top tuning rules by HIT_CNT."""
+    with get_connection() as conn:
+        cur = conn.cursor()
+        if not _has_column(cur, "HIT_CNT"):
+            return []
+        if _has_column(cur, "RULE_TYPE"):
+            q = """
+                SELECT RULE_ID, NVL(RULE_TYPE, 'SEARCH') AS RULE_TYPE,
+                       GUIDANCE, EXAMPLE_BAD_SQL, EXAMPLE_TUNED_SQL,
+                       NVL(HIT_CNT, 0) AS HIT_CNT
+                FROM (
+                    SELECT RULE_ID, RULE_TYPE, GUIDANCE, EXAMPLE_BAD_SQL,
+                           EXAMPLE_TUNED_SQL, HIT_CNT
+                    FROM NEXT_SQL_RULES
+                    WHERE NVL(HIT_CNT, 0) > 0
+                    ORDER BY HIT_CNT DESC NULLS LAST
+                )
+                WHERE ROWNUM <= :1
+            """
+        else:
+            q = """
+                SELECT RULE_ID, 'SEARCH' AS RULE_TYPE,
+                       GUIDANCE, EXAMPLE_BAD_SQL, EXAMPLE_TUNED_SQL,
+                       NVL(HIT_CNT, 0) AS HIT_CNT
+                FROM (
+                    SELECT RULE_ID, GUIDANCE, EXAMPLE_BAD_SQL,
+                           EXAMPLE_TUNED_SQL, HIT_CNT
+                    FROM NEXT_SQL_RULES
+                    WHERE NVL(HIT_CNT, 0) > 0
+                    ORDER BY HIT_CNT DESC NULLS LAST
+                )
+                WHERE ROWNUM <= :1
+            """
+        cur.execute(q, (limit,))
         cols = [d[0] for d in cur.description]
         return [{cols[i]: _s(row[i]) for i in range(len(cols))} for row in cur.fetchall()]
 

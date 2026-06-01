@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from utils.db import get_sql_jobs
+from utils.db import get_sql_jobs, get_sql_job_full
 
 _COLS_TABLE = ["ROW_ID", "SQL_ID", "SPACE_NM", "TAG_KIND", "STATUS", "UPD_TS"]
 
@@ -63,23 +63,27 @@ def render():
     if not row:
         return
 
-    tab1, tab2, tab3 = st.tabs(["원본 SQL (AS-IS)", "변환 SQL (TO-BE)", "로그"])
+    detail = get_sql_job_full(sel_row_id) or row
 
-    with tab1:
-        st.code(row.get("FR_SQL_TEXT") or "(없음)", language="sql")
+    origin_sql = detail.get("EDIT_FR_SQL") or detail.get("FR_SQL_TEXT") or "(없음)"
+    bind_sql = detail.get("BIND_SQL") or "(없음)"
+    test_sql = detail.get("TEST_SQL") or "(없음)"
 
-    with tab2:
-        c1, c2 = st.columns(2)
-        with c1:
-            st.caption("TO_SQL_TEXT")
-            st.code(row.get("TO_SQL_TEXT") or "(없음)", language="sql")
-        with c2:
-            verify = row.get("TUNED_TEST") or ""
-            st.caption(f"건수 검증 결과: **{verify or '-'}**")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        edited = bool(detail.get("EDIT_FR_SQL"))
+        st.caption(f"원본 SQL (AS-IS){' · 수정본' if edited else ''}")
+        st.code(origin_sql, language="sql")
+    with col2:
+        st.caption("BIND_SQL")
+        st.code(bind_sql, language="sql")
+    with col3:
+        st.caption("TEST_SQL")
+        st.code(test_sql, language="sql")
 
-    with tab3:
-        log = row.get("LOG") or ""
+    with st.expander("📋 로그"):
+        log = detail.get("LOG") or ""
         if log:
-            st.text_area("LOG", log, height=200)
+            st.text_area("LOG", log, height=200, label_visibility="collapsed")
         else:
             st.info("로그 없음")

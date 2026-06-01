@@ -183,6 +183,24 @@ def get_sql_status_summary() -> dict[str, int]:
         return {}
 
 
+def get_tuned_pass_sqls() -> list[dict]:
+    """Return rows that have passed tuned SQL validation for XML export."""
+    q = f"""
+        SELECT SPACE_NM, TAG_KIND, SQL_ID, TUNED_SQL
+        FROM {SQL_TABLE}
+        WHERE UPPER(TRIM(TUNED_TEST)) = 'PASS'
+          AND TUNED_SQL IS NOT NULL
+        ORDER BY SPACE_NM, SQL_ID
+    """
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(q)
+            return _to_dicts(cur)
+    except Exception:
+        return []
+
+
 def get_sql_job_full(row_id: str) -> dict | None:
     q = f"""
         SELECT ROWIDTOCHAR(ROWID) AS ROW_ID,

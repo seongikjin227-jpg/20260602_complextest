@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from utils.rag_db import (
     get_all_rules, add_rule, update_rule, delete_rule,
-    rule_id_exists, get_next_rule_id,
+    rule_id_exists, get_next_rule_id, get_top_rules,
 )
 
 
@@ -24,6 +24,31 @@ def render():
 
     st.write(f"**총 {len(rules)}개** 룰 등록됨")
 
+    try:
+        top_rules = get_top_rules(5)
+    except Exception:
+        top_rules = []
+
+    if top_rules:
+        st.subheader("🏆 Top 5 사용 룰 (HIT_CNT 기준)")
+        for rank, rule in enumerate(top_rules, 1):
+            medal = ["🥇", "🥈", "🥉", "4", "5"][rank - 1]
+            hit = int(rule.get("HIT_CNT", 0) or 0)
+            label = f"{medal} **{rule['RULE_ID']}** - {hit}회 사용"
+            with st.expander(label, expanded=(rank == 1)):
+                st.write(f"**type:** `{rule.get('RULE_TYPE', 'SEARCH')}`")
+                st.write("**guidance:**")
+                for line in (rule.get("GUIDANCE") or "").splitlines():
+                    if line.strip():
+                        st.write(f"- {line.strip()}")
+                if rule.get("EXAMPLE_BAD_SQL"):
+                    st.write("**example_bad_sql:**")
+                    st.code(rule["EXAMPLE_BAD_SQL"], language="sql")
+                if rule.get("EXAMPLE_TUNED_SQL"):
+                    st.write("**example_tuned_sql:**")
+                    st.code(rule["EXAMPLE_TUNED_SQL"], language="sql")
+        st.divider()
+
     keyword = st.text_input("🔍 검색", placeholder="RULE_ID 또는 guidance 키워드")
 
     filtered = rules
@@ -41,6 +66,7 @@ def render():
             {
                 "RULE_ID": r["RULE_ID"],
                 "type": r.get("RULE_TYPE", "SEARCH"),
+                "HIT_CNT": int(r.get("HIT_CNT", 0) or 0),
                 "guidance (preview)": (r.get("GUIDANCE") or "")[:80],
                 "CREATED_AT": r.get("CREATED_AT", ""),
                 "UPDATED_AT": r.get("UPDATED_AT", ""),
