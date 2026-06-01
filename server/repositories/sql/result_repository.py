@@ -1,5 +1,7 @@
 """NEXT_SQL_INFO ?? ??/?? ?? repository."""
 
+import os
+
 from server.core.logger import logger
 from server.services.sql.domain_models import SqlInfoJob
 from server.services.sql.db_runtime import get_connection, get_result_table, split_table_owner_and_name
@@ -14,6 +16,7 @@ _CORRECT_COLUMN_MAP = {
 _LEGACY_CORRECT_COLUMN = "CORRECT_SQL"
 _PENDING_JOB_STATUSES = ("URGENT", "FAIL", "READY", "PENDING", "SKIP")
 _SQL_LENGTH_SHORT_MAX = 5000
+_DEFAULT_JOB_MAX_BATCH_COUNT = 30
 
 
 def _to_text(value, default: str = "") -> str:
@@ -32,6 +35,26 @@ def _to_optional_text(value) -> str | None:
     if value is None:
         return None
     return _to_text(value)
+
+
+def _get_job_max_batch_count() -> int:
+    raw_value = os.getenv("JOB_MAX_BATCH_COUNT", str(_DEFAULT_JOB_MAX_BATCH_COUNT))
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError):
+        logger.warning(
+            "[Repo] Invalid JOB_MAX_BATCH_COUNT=%r; using default %s",
+            raw_value,
+            _DEFAULT_JOB_MAX_BATCH_COUNT,
+        )
+        return _DEFAULT_JOB_MAX_BATCH_COUNT
+
+
+def _get_batch_limit_clause(available_columns: set[str]) -> str:
+    max_batch_count = _get_job_max_batch_count()
+    if "BATCH_CNT" not in available_columns or max_batch_count <= 0:
+        return ""
+    return f"AND NVL(BATCH_CNT, 0) < {max_batch_count}"
 
 
 def _get_column_data_lengths(table: str) -> dict[str, int]:
@@ -170,7 +193,7 @@ def get_pending_jobs() -> list[SqlInfoJob]:
     map_type_column = "MAP_TYPE" if "MAP_TYPE" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS MAP_TYPE"
     formatted_sql_column = "FORMATTED_SQL" if "FORMATTED_SQL" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS FORMATTED_SQL"
     tuned_result_column = "TUNED_RESULT" if "TUNED_RESULT" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS TUNED_RESULT"
-    batch_limit_clause = "AND NVL(BATCH_CNT, 0) < 30" if "BATCH_CNT" in available_columns else ""
+    batch_limit_clause = _get_batch_limit_clause(available_columns)
     pending_status_sql = ", ".join(f"'{status}'" for status in _PENDING_JOB_STATUSES)
     query = f"""
         SELECT ROWIDTOCHAR(ROWID) AS RID,
@@ -227,7 +250,7 @@ def get_tuning_jobs() -> list:
     map_type_column = "MAP_TYPE" if "MAP_TYPE" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS MAP_TYPE"
     formatted_sql_column = "FORMATTED_SQL" if "FORMATTED_SQL" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS FORMATTED_SQL"
     tuned_result_column = "TUNED_RESULT" if "TUNED_RESULT" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS TUNED_RESULT"
-    batch_limit_clause = "AND NVL(BATCH_CNT, 0) < 30" if "BATCH_CNT" in available_columns else ""
+    batch_limit_clause = _get_batch_limit_clause(available_columns)
 
     query = f"""
         SELECT ROWIDTOCHAR(ROWID) AS RID,
