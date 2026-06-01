@@ -158,7 +158,7 @@ def get_sql_jobs() -> list[dict]:
     q = f"""
         SELECT ROWIDTOCHAR(ROWID) AS ROW_ID,
                TAG_KIND, SPACE_NM, SQL_ID,
-               FR_SQL_TEXT, TO_SQL_TEXT, TUNED_SQL, TUNED_TEST,
+               FR_SQL_TEXT, TO_SQL_TEXT, TUNED_SQL, TUNED_TEST, TUNED_RESULT,
                STATUS, LOG, TO_CHAR(UPD_TS) AS UPD_TS
         FROM {SQL_TABLE}
         ORDER BY UPD_TS DESC NULLS LAST
@@ -206,7 +206,7 @@ def get_sql_job_full(row_id: str) -> dict | None:
         SELECT ROWIDTOCHAR(ROWID) AS ROW_ID,
                TAG_KIND, SPACE_NM, SQL_ID,
                FR_SQL_TEXT, EDIT_FR_SQL, TARGET_TABLE,
-               TO_SQL_TEXT, TUNED_SQL, TUNED_TEST,
+               TO_SQL_TEXT, TUNED_SQL, TUNED_TEST, TUNED_RESULT,
                BIND_SQL, BIND_SET, TEST_SQL,
                STATUS, LOG, TO_CHAR(UPD_TS) AS UPD_TS, EDITED_YN
         FROM {SQL_TABLE}

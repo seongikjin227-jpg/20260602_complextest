@@ -28,7 +28,7 @@ _RUN_SQL_TUNING = _SQL_TUNING_ONLY or not _HAS_AGENT_SELECTION
 _RUNTIME_DIR = Path(__file__).resolve().parent.parent.parent.parent / "runtime"
 PAUSE_FLAG = _RUNTIME_DIR / "agent.pause"
 POLL_INTERVAL_SEC = 5
-JOB_BATCH_SIZE = 20
+JOB_BATCH_SIZE = 5
 
 _stop_event = threading.Event()
 
@@ -141,7 +141,7 @@ def build_supervisor_graph(
         }
 
     def execute_node(state: SupervisorState) -> dict:
-        """Run up to 20 jobs for each agent from the current poll result."""
+        """Run up to JOB_BATCH_SIZE jobs for each agent from the current poll result."""
         if not mig_registry and not sql_registry and not tuning_registry:
             return {"stop_requested": _stop_event.is_set() or state.get("stop_requested", False)}
 

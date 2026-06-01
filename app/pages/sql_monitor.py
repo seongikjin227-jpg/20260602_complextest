@@ -45,7 +45,7 @@ def render():
 
     show_cols = [c for c in _COLS_TABLE if c in df.columns]
     st.write(f"**{len(df)}건** 조회됨")
-    st.dataframe(df[show_cols], use_container_width=True, hide_index=True)
+    st.dataframe(df[show_cols], width="stretch", hide_index=True)
 
     # ── 상세 조회 ─────────────────────────────────────────────────────────────
     st.divider()

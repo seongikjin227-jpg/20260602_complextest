@@ -51,7 +51,7 @@ def render():
 
     show_cols = [c for c in _COLS_TABLE if c in df.columns]
     st.write(f"**{len(df)}건** 조회됨")
-    st.dataframe(df[show_cols], use_container_width=True, hide_index=True)
+    st.dataframe(df[show_cols], width="stretch", hide_index=True)
 
     # ── 상세 조회 ─────────────────────────────────────────────────────────────
     st.divider()
@@ -92,13 +92,13 @@ def render():
     with tab3:
         logs = get_mig_logs(map_id)
         if logs:
-            st.dataframe(pd.DataFrame(logs), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(logs), width="stretch", hide_index=True)
         else:
             st.info("로그 없음")
 
     with st.expander("컬럼 매핑 정보"):
         dtl = get_mig_dtl(map_id)
         if dtl:
-            st.dataframe(pd.DataFrame(dtl), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(dtl), width="stretch", hide_index=True)
         else:
             st.info("매핑 정보 없음")

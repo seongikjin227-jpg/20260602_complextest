@@ -24,6 +24,7 @@ class JobExecutionState:
     test_sql: str = ""
     formatted_sql: str = ""
     test_rows: list[dict] = field(default_factory=list)
+    tuned_test_rows: list[dict] = field(default_factory=list)
     status: str | None = None
 
 

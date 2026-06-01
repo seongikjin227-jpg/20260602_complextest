@@ -69,11 +69,18 @@ def render():
 
     if selected_ns:
         xml_text = _build_xml(selected_ns, grouped[selected_ns])
+        selected_count = len(grouped[selected_ns])
+
+        col_download, col_selected = st.columns([1, 3])
+        with col_download:
+            st.download_button(
+                "XML 다운로드",
+                data=xml_text.encode("utf-8"),
+                file_name=f"{selected_ns}.xml",
+                mime="application/xml",
+                width="stretch",
+            )
+        with col_selected:
+            st.caption(f"{selected_ns} · {selected_count}개 SQL")
+
         st.code(xml_text, language="xml")
-        st.download_button(
-            "XML 다운로드",
-            data=xml_text.encode("utf-8"),
-            file_name=f"{selected_ns}.xml",
-            mime="application/xml",
-            use_container_width=True,
-        )

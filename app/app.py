@@ -34,7 +34,7 @@ _MENU = {
     "🔄 SQL Agent Monitor":    render_sql,
     "⚡ Tuning Agent Monitor": render_tuning,
     "🔎 Job Detail":           render_job_detail,
-    "📚 RAG Rule Manager":     render_rag,
+    "📚 Tuning Rule Manager":  render_rag,
     "🏥 System Health":        render_health,
     "⚙️ Settings":             render_settings,
     "📄 XML Export":           render_xml,
@@ -94,7 +94,7 @@ with st.sidebar:
     st.markdown(f"**{status['label']}**" + (f"  `PID {status['pid']}`" if status["pid"] else ""))
 
     if not status["running"]:
-        if st.button("▶ 시작", use_container_width=True, type="primary"):
+        if st.button("▶ 시작", width="stretch", type="primary"):
             msg = start()
             st.toast(msg)
             st.rerun()
@@ -102,16 +102,16 @@ with st.sidebar:
         c1, c2 = st.columns(2)
         if status["paused"]:
             with c1:
-                if st.button("▶ 재개", use_container_width=True, type="primary"):
+                if st.button("▶ 재개", width="stretch", type="primary"):
                     st.toast(resume())
                     st.rerun()
         else:
             with c1:
-                if st.button("⏸ 일시정지", use_container_width=True):
+                if st.button("⏸ 일시정지", width="stretch"):
                     st.toast(pause())
                     st.rerun()
         with c2:
-            if st.button("■ 중지", use_container_width=True, type="secondary"):
+            if st.button("■ 중지", width="stretch", type="secondary"):
                 st.toast(stop())
                 st.rerun()
 
@@ -121,7 +121,7 @@ with st.sidebar:
     with col_log1:
         log_lines = st.number_input("줄 수", min_value=10, max_value=200, value=30, step=10, label_visibility="collapsed")
     with col_log2:
-        if st.button("🔄", help="새로고침", use_container_width=True):
+        if st.button("🔄", help="새로고침", width="stretch"):
             st.rerun()
 
     if _LOG_FILE.exists():

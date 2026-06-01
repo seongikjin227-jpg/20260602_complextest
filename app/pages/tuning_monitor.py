@@ -43,7 +43,7 @@ def render():
 
     show_cols = [c for c in _COLS_TABLE if c in df.columns]
     st.write(f"**{len(df)}건** 조회됨")
-    st.dataframe(df[show_cols], use_container_width=True, hide_index=True)
+    st.dataframe(df[show_cols], width="stretch", hide_index=True)
 
     # ── 상세 비교 ─────────────────────────────────────────────────────────────
     st.divider()
@@ -60,6 +60,18 @@ def render():
     row = next((j for j in jobs if j["ROW_ID"] == sel_row_id), None)
     if not row:
         return
+
+    st.markdown("#### TUNED_RESULT")
+    tuned_result = row.get("TUNED_RESULT") or "(없음)"
+    if tuned_result == "NO TUNING":
+        st.info(tuned_result)
+    else:
+        st.text_area(
+            "TUNED_RESULT",
+            tuned_result,
+            height=140,
+            label_visibility="collapsed",
+        )
 
     c1, c2 = st.columns(2)
     with c1:

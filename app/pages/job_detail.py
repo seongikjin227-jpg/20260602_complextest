@@ -58,13 +58,13 @@ def render():
         # 컬럼 매핑
         with st.expander("컬럼 매핑 (NEXT_MIG_INFO_DTL)"):
             dtl = get_mig_dtl(map_id)
-            st.dataframe(pd.DataFrame(dtl) if dtl else pd.DataFrame(), use_container_width=True)
+            st.dataframe(pd.DataFrame(dtl) if dtl else pd.DataFrame(), width="stretch")
 
         # 로그
         st.subheader("실행 로그")
         logs = get_mig_logs(map_id)
         if logs:
-            st.dataframe(pd.DataFrame(logs), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(logs), width="stretch", hide_index=True)
         else:
             st.info("로그 없음")
 

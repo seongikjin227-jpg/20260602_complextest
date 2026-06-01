@@ -7,7 +7,7 @@ from utils.rag_db import (
 
 
 def render():
-    st.title("📚 RAG Rule Manager")
+    st.title("📚 Tuning Rule Manager")
     st.caption("Oracle DB (NEXT_SQL_RULES) 기반 튜닝 룰 관리")
 
     col_title, col_refresh = st.columns([9, 1])
@@ -73,7 +73,7 @@ def render():
             }
             for r in filtered
         ]
-        st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(table_rows), width="stretch", hide_index=True)
     else:
         st.info("검색 결과 없음")
 

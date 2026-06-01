@@ -44,6 +44,20 @@ div[data-testid="stVerticalBlock"] button.chat-item {
 .badge-pass { color: #10b981; }
 .badge-fail { color: #ef4444; }
 .badge-etc  { color: #6c757d; }
+.rate-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+    margin: 10px 0 8px 0;
+}
+.rate-box {
+    background: #ffffff; border: 1px solid #e9ecef;
+    border-radius: 8px; padding: 8px 10px;
+}
+.rate-label {
+    font-size: 11px; color: #6c757d; font-weight: 700;
+    letter-spacing: .4px; margin-bottom: 4px;
+}
+.rate-value { font-size: 18px; font-weight: 800; color: #212529; }
+.rate-sub { font-size: 11px; color: #adb5bd; margin-top: 2px; }
 /* 구분선 */
 .divider { border-top: 1px solid #e9ecef; margin: 8px 0; }
 </style>
@@ -193,6 +207,39 @@ _ICON = {"PASS": "✅", "FAIL": "❌", "RUNNING": "🔄", "READY": "🔵",
          "SKIP": "⏭️", "NA": "🚫", "NULL": "⚫", "PENDING": "🟣"}
 _CLR  = {"PASS": "badge-pass", "FAIL": "badge-fail"}
 _STATUS_ORDER = ["PASS", "FAIL", "RUNNING", "READY", "SKIP", "NA", "PENDING", "NULL"]
+_SUCCESS_EXCLUDED = {"NA", "SKIP", "NULL", "READY", "RUNNING", "PENDING"}
+
+def _norm_status(status) -> str:
+    return str(status or "NULL").strip().upper() or "NULL"
+
+def _pct(numerator: int, denominator: int) -> str:
+    if denominator <= 0:
+        return "-"
+    return f"{(numerator / denominator) * 100:.1f}%"
+
+def _rate_html(summary: dict) -> str:
+    normalized: dict[str, int] = {}
+    for k, v in summary.items():
+        normalized[_norm_status(k)] = normalized.get(_norm_status(k), 0) + int(v or 0)
+
+    total = sum(normalized.values())
+    pass_count = normalized.get("PASS", 0)
+    success_base = sum(v for k, v in normalized.items() if k not in _SUCCESS_EXCLUDED)
+
+    return f"""
+      <div class="rate-grid">
+        <div class="rate-box">
+          <div class="rate-label">진척률</div>
+          <div class="rate-value">{_pct(pass_count, total)}</div>
+          <div class="rate-sub">{pass_count}/{total}건</div>
+        </div>
+        <div class="rate-box">
+          <div class="rate-label">성공률</div>
+          <div class="rate-value">{_pct(pass_count, success_base)}</div>
+          <div class="rate-sub">{pass_count}/{success_base}건</div>
+        </div>
+      </div>
+    """
 
 def _status_card(title: str, summary: dict):
     if not summary:
@@ -215,6 +262,7 @@ def _status_card(title: str, summary: dict):
     st.markdown(f"""
     <div class="stat-card">
       <div class="stat-card-title">{title} &nbsp;<span style="font-weight:400;color:#adb5bd">총 {total}건</span></div>
+      {_rate_html(summary)}
       {rows}
     </div>""", unsafe_allow_html=True)
 
@@ -238,7 +286,7 @@ def render():
     # ════════════════════════════════════════════════════════════
     with left:
         st.markdown("#### 💬 대화 목록")
-        if st.button("✏️ 새 대화", use_container_width=True, type="primary"):
+        if st.button("✏️ 새 대화", width="stretch", type="primary"):
             st.session_state.current_chat = _new_chat()
             st.rerun()
 
@@ -254,7 +302,7 @@ def render():
                 if st.button(
                     f"{'▶ ' if is_current else ''}{label}",
                     key=f"chat_{c['id']}",
-                    use_container_width=True,
+                    width="stretch",
                     type="primary" if is_current else "secondary",
                 ):
                     loaded = _load_chat(c["id"])

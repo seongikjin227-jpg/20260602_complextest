@@ -74,10 +74,10 @@ app/
 - `app/pages/sql_monitor.py`: SQL Conversion 결과와 상태를 확인합니다.
 - `app/pages/tuning_monitor.py`: SQL Tuning 결과와 상태를 확인합니다.
 - `app/pages/job_detail.py`: 개별 job의 SQL, bind set, test SQL, 로그를 확인합니다.
-- `app/pages/rag_manager_page.py`: RAG/tuning rule 데이터를 관리합니다.
+- `app/pages/rag_manager_page.py`: Tuning Rule Manager 화면에서 tuning rule 데이터를 관리합니다.
 - `app/pages/system_health.py`: DB, LLM, runtime 상태를 확인합니다.
 - `app/pages/settings_page.py`: 환경 설정 값을 확인/관리합니다.
-- `app/utils/*`: 화면에서 사용하는 DB, 환경, agent 제어, RAG 관리 유틸입니다.
+- `app/utils/*`: 화면에서 사용하는 DB, 환경, agent 제어, tuning rule 관리 유틸입니다.
 
 ### scripts
 

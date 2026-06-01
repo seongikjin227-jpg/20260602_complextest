@@ -266,7 +266,61 @@ class SqlTuningAgent:
         state.tuned_test = None
         if self.max_iterations <= 0:
             return
+        tag_kind = (state.job.tag_kind or "").strip().upper()
+        max_tuning_attempts = 2 if tag_kind == "SELECT" else 1
+
+        for tuning_attempt in range(1, max_tuning_attempts + 1):
+            self._apply_tuning_rules(state)
+
+            if tag_kind != "SELECT":
+                state.tuned_test = "SKIP"
+                logger.info(
+                    f"[{self.name}] ({state.job_key}) stage=SKIP_TUNED_TEST_FOR_NON_SELECT "
+                    f"completed (tag_kind={tag_kind or 'UNKNOWN'})"
+                )
+                break
+
+            try:
+                self._run_tuned_sql_validation(state)
+            except Exception as exc:
+                if tuning_attempt >= max_tuning_attempts:
+                    raise
+                state.last_error = f"TUNED_TEST_SQL_ERROR: {exc}"
+                logger.warning(
+                    f"[{self.name}] ({state.job_key}) stage=TUNING_RETRY_CONTEXT "
+                    f"attempt={tuning_attempt + 1}/{max_tuning_attempts} last_error={state.last_error}"
+                )
+                continue
+
+            if state.tuned_test == "PASS" or tuning_attempt >= max_tuning_attempts:
+                break
+
+            state.last_error = "TUNED_TEST_VALIDATION_FAIL: " + self._summarize_test_rows_for_retry(state.tuned_test_rows)
+            logger.warning(
+                f"[{self.name}] ({state.job_key}) stage=TUNING_RETRY_CONTEXT "
+                f"attempt={tuning_attempt + 1}/{max_tuning_attempts} last_error={state.last_error}"
+            )
+
+        if state.tuned_test == "PASS":
+            tobe_sql_tuning_service.increment_rule_hit_counts_for_success(state.tuning_examples)
+        if state.tuned_test in ("PASS", "SKIP"):
+            state.formatted_sql = generate_formatted_sql(
+                job=state.job,
+                input_sql=state.tuned_sql or state.tobe_sql,
+            )
+            logger.info(
+                f"[{self.name}] ({state.job_key}) stage=GENERATE_FORMATTED_SQL "
+                f"completed (sql_length={len(state.formatted_sql)})"
+            )
+
+    def _apply_tuning_rules(self, state: JobExecutionState) -> None:
         current_sql = state.tobe_sql or ""
+        state.tuned_sql = current_sql
+        state.tuned_result = ""
+        state.tuned_test = None
+        state.tuned_test_rows = []
+        state.tuning_examples = []
+
         for iteration in range(1, self.max_iterations + 1):
             tuning_examples = tobe_sql_tuning_service.retrieve_tuning_examples(current_sql)
             state.tuning_examples = tuning_examples
@@ -298,26 +352,6 @@ class SqlTuningAgent:
             current_sql = tuned_sql
 
         state.tuned_sql = current_sql
-        tag_kind = (state.job.tag_kind or "").strip().upper()
-        if tag_kind == "SELECT":
-            self._run_tuned_sql_validation(state)
-        else:
-            state.tuned_test = "SKIP"
-            logger.info(
-                f"[{self.name}] ({state.job_key}) stage=SKIP_TUNED_TEST_FOR_NON_SELECT "
-                f"completed (tag_kind={tag_kind or 'UNKNOWN'})"
-            )
-        if state.tuned_test == "PASS":
-            tobe_sql_tuning_service.increment_rule_hit_counts_for_success(state.tuning_examples)
-        if state.tuned_test in ("PASS", "SKIP"):
-            state.formatted_sql = generate_formatted_sql(
-                job=state.job,
-                input_sql=state.tuned_sql or state.tobe_sql,
-            )
-            logger.info(
-                f"[{self.name}] ({state.job_key}) stage=GENERATE_FORMATTED_SQL "
-                f"completed (sql_length={len(state.formatted_sql)})"
-            )
 
     def _run_tuned_sql_validation(self, state: JobExecutionState) -> None:
         comparison_test_sql = generate_sql_comparison_test_sql(
@@ -355,6 +389,7 @@ class SqlTuningAgent:
             f"completed (rows={len(comparison_rows)})"
         )
 
+        state.tuned_test_rows = comparison_rows
         state.tuned_test = evaluate_status_from_test_rows(comparison_rows)
         insert_sql_log(
             space_nm=state.job.space_nm,
@@ -372,6 +407,27 @@ class SqlTuningAgent:
             f"[{self.name}] ({state.job_key}) stage=EVALUATE_TUNED_TEST "
             f"completed (status={state.tuned_test})"
         )
+
+    @staticmethod
+    def _get_case_insensitive_value(row: dict, key: str):
+        lowered = key.lower()
+        for existing_key, value in row.items():
+            if str(existing_key).lower() == lowered:
+                return value
+        return None
+
+    @classmethod
+    def _summarize_test_rows_for_retry(cls, rows: list[dict]) -> str:
+        if not rows:
+            return "no_rows_returned"
+
+        samples: list[str] = []
+        for row in rows[:5]:
+            case_no = cls._get_case_insensitive_value(row, "case_no")
+            from_count = cls._get_case_insensitive_value(row, "from_count")
+            to_count = cls._get_case_insensitive_value(row, "to_count")
+            samples.append(f"CASE_NO={case_no},BASELINE_COUNT={from_count},TUNED_COUNT={to_count}")
+        return " ; ".join(samples)
 
 
 class TobeMultiAgentCoordinator:

@@ -769,12 +769,11 @@ def _is_final_retry_mode(last_error: str | None) -> bool:
 
 
 def _generate_validation_test_sql(
-    source_sql: str,
-    target_sql: str,
+    from_sql: str,
+    tobe_sql: str,
     bind_set_json: str | None,
-    source_schema: str,
-    target_schema: str,
-    comparison_mode: str,
+    from_schema: str,
+    tobe_schema: str,
     last_error: str | None = None,
     final_retry_mode: bool = False,
     correct_sql_hint_json: str = "[]",
@@ -789,12 +788,11 @@ def _generate_validation_test_sql(
         last_error=last_error,
         messages=_build_sql_messages(
             template_name,
-            source_sql=source_sql,
-            target_sql=target_sql,
-            source_schema=source_schema or "UNKNOWN",
-            target_schema=target_schema or "UNKNOWN",
+            from_sql=from_sql,
+            tobe_sql=tobe_sql,
+            from_schema=from_schema or "UNKNOWN",
+            tobe_schema=tobe_schema or "UNKNOWN",
             bind_set_json=_load_bind_sets_json(bind_set_json),
-            comparison_mode=comparison_mode,
             correct_sql_hint_json=correct_sql_hint_json,
             last_error=last_error or "None",
         ),
@@ -813,12 +811,11 @@ def generate_test_sql(
         current_row_id=job.row_id,
     )
     return _generate_validation_test_sql(
-        source_sql=job.source_sql,
-        target_sql=tobe_sql,
+        from_sql=job.source_sql,
+        tobe_sql=tobe_sql,
         bind_set_json=bind_set_json,
-        source_schema=_schema_env("ORACLE_SCHEMA_SRC"),
-        target_schema=_schema_env("ORACLE_SCHEMA_TGT"),
-        comparison_mode="SOURCE_TO_TARGET",
+        from_schema=_schema_env("ORACLE_SCHEMA_SRC"),
+        tobe_schema=_schema_env("ORACLE_SCHEMA_TGT"),
         last_error=last_error,
         final_retry_mode=_is_final_retry_mode(last_error),
         correct_sql_hint_json=serialize_correct_sql_hints_for_prompt(correct_sql_hints),
@@ -834,18 +831,20 @@ def generate_sql_comparison_test_sql(
     last_error: str | None = None,
     job: SqlInfoJob | None = None,
 ) -> str:
-    target_schema = _schema_env("ORACLE_SCHEMA_TGT")
-    return _generate_validation_test_sql(
-        source_sql=baseline_sql,
-        target_sql=candidate_sql,
-        bind_set_json=bind_set_json,
-        source_schema=target_schema,
-        target_schema=target_schema,
-        comparison_mode="TARGET_TO_TARGET",
-        last_error=last_error,
-        correct_sql_hint_json="[]",
+    template_name = "tuned_test_sql_prompt.json"
+    return _call_llm_for_job(
         job=job,
         sql_kind="TUNED_TEST_SQL",
+        prompt_name=template_name,
+        last_error=last_error,
+        messages=_build_sql_messages(
+            template_name,
+            baseline_tobe_sql=baseline_sql,
+            tuned_sql=candidate_sql,
+            tobe_schema=_schema_env("ORACLE_SCHEMA_TGT") or "UNKNOWN",
+            bind_set_json=_load_bind_sets_json(bind_set_json),
+            last_error=last_error or "None",
+        ),
     )
 
 
