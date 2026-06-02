@@ -228,7 +228,7 @@ def _rate_bases(title: str, normalized: dict[str, int]) -> tuple[int, int]:
         )
     if "SQL" in title:
         return (
-            _sum_excluding(normalized, {"NA"}),
+            sum(normalized.values()),
             _sum_excluding(normalized, {"NA", "SKIP"}),
         )
     return (

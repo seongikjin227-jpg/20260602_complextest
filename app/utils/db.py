@@ -159,6 +159,7 @@ def get_sql_jobs() -> list[dict]:
         SELECT ROWIDTOCHAR(ROWID) AS ROW_ID,
                TAG_KIND, SPACE_NM, SQL_ID,
                FR_SQL_TEXT, TO_SQL_TEXT, TUNED_SQL, TUNED_TEST, TUNED_RESULT,
+               FORMATTED_SQL, BLOCK_RAG_CONTENT,
                STATUS, LOG, TO_CHAR(UPD_TS) AS UPD_TS
         FROM {SQL_TABLE}
         ORDER BY UPD_TS DESC NULLS LAST
@@ -183,13 +184,14 @@ def get_sql_status_summary() -> dict[str, int]:
         return {}
 
 
-def get_tuned_pass_sqls() -> list[dict]:
-    """Return rows that have passed tuned SQL validation for XML export."""
+def get_xml_export_sqls() -> list[dict]:
+    """Return tuning rows used by XML export, including namespace status counts."""
     q = f"""
-        SELECT SPACE_NM, TAG_KIND, SQL_ID, TUNED_SQL
+        SELECT SPACE_NM, TAG_KIND, SQL_ID, TUNED_TEST, FORMATTED_SQL
         FROM {SQL_TABLE}
-        WHERE UPPER(TRIM(TUNED_TEST)) = 'PASS'
-          AND TUNED_SQL IS NOT NULL
+        WHERE SPACE_NM IS NOT NULL
+          AND SQL_ID IS NOT NULL
+          AND (TUNED_TEST IS NOT NULL OR FORMATTED_SQL IS NOT NULL)
         ORDER BY SPACE_NM, SQL_ID
     """
     try:
@@ -199,6 +201,11 @@ def get_tuned_pass_sqls() -> list[dict]:
             return _to_dicts(cur)
     except Exception:
         return []
+
+
+def get_tuned_pass_sqls() -> list[dict]:
+    """Backward-compatible alias for older XML export callers."""
+    return get_xml_export_sqls()
 
 
 def get_sql_job_full(row_id: str) -> dict | None:

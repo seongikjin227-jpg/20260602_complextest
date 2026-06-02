@@ -49,6 +49,14 @@ def get_active_model() -> str | None:
         return _active_model
 
 
+def reset_active_model() -> str | None:
+    with _lock:
+        global _active_model
+        previous_model = _active_model
+        _active_model = None
+        return previous_model
+
+
 def is_model_fallback_error(message: str) -> bool:
     text = (message or "").lower()
     fatal_patterns = (

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from langgraph.graph import END, StateGraph
 
+from server.core.llm_fallback import reset_active_model
 from server.agents.supervisor.state import SupervisorState
 import server.tools as supervisor_tools
 
@@ -91,6 +92,12 @@ def build_supervisor_graph(
         cycle = state.get("cycle", 0) + 1
         logger.info(f"\n{'=' * 50}")
         logger.info(f"[Supervisor] Batch loop {cycle} 시작")
+        previous_model = reset_active_model()
+        if previous_model:
+            logger.info(
+                f"[Supervisor] LLM active model reset for new cycle "
+                f"(previous={previous_model})"
+            )
         supervisor_tools.start_cycle_metrics(cycle)
 
         mig_jobs, sql_jobs, tuning_jobs = [], [], []
