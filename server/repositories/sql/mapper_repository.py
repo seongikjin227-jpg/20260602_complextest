@@ -23,12 +23,54 @@ def _to_text(value, default: str = "") -> str:
     return str(value)
 
 
+def _split_table_owner_and_name(table: str) -> tuple[str | None, str]:
+    value = (table or "").strip().upper()
+    if "." in value:
+        owner, table_name = value.split(".", 1)
+        return owner.strip('"'), table_name.strip('"')
+    return None, value.strip('"')
+
+
+def _map_table_columns() -> set[str]:
+    owner, table_name = _split_table_owner_and_name(get_mapping_rule_table())
+    if owner:
+        query = """
+            SELECT COLUMN_NAME
+            FROM ALL_TAB_COLUMNS
+            WHERE OWNER = :1
+              AND TABLE_NAME = :2
+        """
+        params = [owner, table_name]
+    else:
+        query = """
+            SELECT COLUMN_NAME
+            FROM USER_TAB_COLUMNS
+            WHERE TABLE_NAME = :1
+        """
+        params = [table_name]
+
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        return {_to_text(row[0]).upper() for row in cursor.fetchall()}
+
+
+def _is_complex_map_type(map_type: str | None) -> bool:
+    return "COMPLEX" in _to_text(map_type).strip().upper()
+
+
 def get_all_mapping_rules() -> list[MappingRuleItem]:
     """NEXT_MIG_INFO + DTL 조인으로 전체 매핑 룰을 읽어온다."""
     map_table = get_mapping_rule_table()
     detail_table = get_mapping_rule_detail_table()
+    map_columns = _map_table_columns()
+    description_expr = (
+        "M.DESCRIPTION"
+        if "DESCRIPTION" in map_columns
+        else "CAST(NULL AS VARCHAR2(4000)) AS DESCRIPTION"
+    )
     query = f"""
-        SELECT M.MAP_TYPE, M.FR_TABLE, D.FR_COL, M.TO_TABLE, D.TO_COL
+        SELECT M.MAP_TYPE, M.FR_TABLE, D.FR_COL, M.TO_TABLE, D.TO_COL, {description_expr}
         FROM {map_table} M
         JOIN {detail_table} D
           ON M.MAP_ID = D.MAP_ID
@@ -49,6 +91,7 @@ def get_all_mapping_rules() -> list[MappingRuleItem]:
                     fr_col=_to_text(row[2]),
                     to_table=_to_text(row[3]),
                     to_col=_to_text(row[4]),
+                    description=_to_text(row[5]),
                 )
             )
     return rules
@@ -79,7 +122,7 @@ def get_sql_map_type(target_table_value: str | None) -> str | None:
 
     if not matched_map_types:
         return None
-    if any(map_type == "COMPLEX" for map_type in matched_map_types):
+    if any(_is_complex_map_type(map_type) for map_type in matched_map_types):
         return "COMPLEX"
     return "SIMPLE"
 

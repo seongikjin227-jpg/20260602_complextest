@@ -49,3 +49,4 @@ class MappingRuleItem:
     fr_col: str
     to_table: str
     to_col: str
+    description: str = ""

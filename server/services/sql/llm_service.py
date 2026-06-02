@@ -98,6 +98,55 @@ def _serialize_mapping_rules(mapping_rules: list[MappingRuleItem]) -> str:
     return "\n".join(lines)
 
 
+def _is_complex_map_type(map_type: str | None) -> bool:
+    return "COMPLEX" in (map_type or "").strip().upper()
+
+
+def _serialize_complex_mapping_rules(mapping_rules: list[MappingRuleItem]) -> str:
+    simple_rules = [rule for rule in mapping_rules if not _is_complex_map_type(rule.map_type)]
+    complex_rules = [rule for rule in mapping_rules if _is_complex_map_type(rule.map_type)]
+    sections: list[str] = []
+    if simple_rules:
+        sections.append(_serialize_mapping_rules(simple_rules))
+    sections.append(_serialize_complex_only_mapping_rules(complex_rules))
+    return "\n\n".join(sections)
+
+
+def _serialize_complex_only_mapping_rules(mapping_rules: list[MappingRuleItem]) -> str:
+    if not mapping_rules:
+        return "[COMPLEX_MAPPING_RULES]\n- (empty)"
+
+    target_schema = _schema_env("ORACLE_SCHEMA_TGT")
+    grouped: dict[tuple[str, str, str, str], dict[str, set[str]]] = {}
+    for rule in mapping_rules:
+        key = (
+            (rule.map_type or "").strip().upper(),
+            (rule.fr_table or "").strip(),
+            _qualify_mapping_table(rule.to_table, target_schema),
+            (rule.description or "").strip(),
+        )
+        bucket = grouped.setdefault(key, {"from_columns": set(), "to_columns": set()})
+        if (rule.fr_col or "").strip():
+            bucket["from_columns"].add((rule.fr_col or "").strip())
+        if (rule.to_col or "").strip():
+            bucket["to_columns"].add((rule.to_col or "").strip())
+
+    lines = ["[COMPLEX_MAPPING_RULES]"]
+    for idx, ((map_type, from_table_dml, to_table, description), columns) in enumerate(sorted(grouped.items()), start=1):
+        lines.append(f"\n## COMPLEX_RULE_{idx}")
+        lines.append(f"MAP_TYPE={map_type or 'COMPLEX'}")
+        lines.append("FROM_TABLE_DML:")
+        lines.append("```sql")
+        lines.append(from_table_dml or "(empty)")
+        lines.append("```")
+        lines.append(f"TO_TABLE={to_table or '(empty)'}")
+        lines.append("TO_COLUMNS=" + ", ".join(sorted(columns["to_columns"])))
+        lines.append("FROM_COLUMNS_SEARCH_KEYS=" + ", ".join(sorted(columns["from_columns"])))
+        lines.append("DESCRIPTION:")
+        lines.append(description or "(empty)")
+    return "\n".join(lines)
+
+
 def _qualify_mapping_table(table_name: str, schema: str) -> str:
     table = (table_name or "").strip()
     if not table or "." in table or not schema:
@@ -162,7 +211,6 @@ def _select_mapping_rules_for_job(job: SqlInfoJob, mapping_rules: list[MappingRu
         return [
             rule
             for rule in mapping_rules
-            # SqlInfoJob.target_table stores source tables parsed from FROM SQL.
             if _fr_table_contains_any_target(rule.fr_table, target_tables)
         ]
 
@@ -652,13 +700,22 @@ def generate_tobe_sql(
     mapping_rules: list[MappingRuleItem],
     last_error: str | None = None,
 ) -> str:
-    template_name = "tobe_sql_prompt.json"
     scoped_rules = _select_mapping_rules_for_job(job=job, mapping_rules=mapping_rules)
-    correct_sql_hints = correct_sql_hint_rag_service.retrieve_correct_sql_hints(
-        sql_text=job.source_sql,
-        correct_kind="TOBE",
-        current_row_id=job.row_id,
+    is_complex = any(_is_complex_map_type(rule.map_type) for rule in scoped_rules)
+    template_name = "tobe_sql_complex_prompt.json" if is_complex else "tobe_sql_prompt.json"
+    mapping_schema_text = (
+        _serialize_complex_mapping_rules(scoped_rules)
+        if is_complex
+        else _serialize_mapping_rules(scoped_rules)
     )
+    correct_sql_hint_json = "[]"
+    if not is_complex:
+        correct_sql_hints = correct_sql_hint_rag_service.retrieve_correct_sql_hints(
+            sql_text=job.source_sql,
+            correct_kind="TOBE",
+            current_row_id=job.row_id,
+        )
+        correct_sql_hint_json = serialize_correct_sql_hints_for_prompt(correct_sql_hints)
     return _call_llm_for_job(
         job=job,
         sql_kind="TOBE_SQL",
@@ -667,9 +724,9 @@ def generate_tobe_sql(
         messages=_build_sql_messages(
             template_name,
             from_sql=job.source_sql,
-            mapping_schema_text=_serialize_mapping_rules(scoped_rules),
+            mapping_schema_text=mapping_schema_text,
             target_schema=_schema_env("ORACLE_SCHEMA_TGT") or "UNKNOWN",
-            correct_sql_hint_json=serialize_correct_sql_hints_for_prompt(correct_sql_hints),
+            correct_sql_hint_json=correct_sql_hint_json,
             last_error=last_error or "None",
         ),
     )
