@@ -12,7 +12,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from server.core.exceptions import LLMRateLimitError
-from server.core.llm_fallback import is_model_fallback_error, model_candidates, set_active_model
+from server.core.llm_fallback import get_active_model, is_model_fallback_error, model_candidates, set_active_model
 from server.core.logger import logger
 from server.repositories.sql.log_repository import insert_sql_log
 from server.services.sql.domain_models import MappingRuleItem, SqlInfoJob
@@ -769,7 +769,7 @@ def _schema_env(name: str) -> str:
 
 
 def _model_name() -> str:
-    return (os.getenv("LLM_MODEL") or "").strip()
+    return (get_active_model() or os.getenv("LLM_MODEL") or "").strip()
 
 
 def _attempt_no(last_error: str | None) -> int | None:
