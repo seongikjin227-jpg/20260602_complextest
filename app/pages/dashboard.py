@@ -58,6 +58,7 @@ div[data-testid="stVerticalBlock"] button.chat-item {
 }
 .rate-value { font-size: 18px; font-weight: 800; color: #212529; }
 .rate-sub { font-size: 11px; color: #adb5bd; margin-top: 2px; }
+.rate-note { font-size: 10px; color: #868e96; line-height: 1.4; margin: 2px 0 8px 0; }
 /* 구분선 */
 .divider { border-top: 1px solid #e9ecef; margin: 8px 0; }
 </style>
@@ -207,7 +208,7 @@ _ICON = {"PASS": "✅", "FAIL": "❌", "RUNNING": "🔄", "READY": "🔵",
          "SKIP": "⏭️", "NA": "🚫", "NULL": "⚫", "PENDING": "🟣"}
 _CLR  = {"PASS": "badge-pass", "FAIL": "badge-fail"}
 _STATUS_ORDER = ["PASS", "FAIL", "RUNNING", "READY", "SKIP", "NA", "PENDING", "NULL"]
-_SUCCESS_EXCLUDED = {"NA", "SKIP", "NULL", "READY", "RUNNING", "PENDING"}
+_PROGRESS_EXCLUDED = {"NA"}
 
 def _norm_status(status) -> str:
     return str(status or "NULL").strip().upper() or "NULL"
@@ -220,43 +221,47 @@ def _pct(numerator: int, denominator: int) -> str:
 def _sum_excluding(normalized: dict[str, int], excluded: set[str]) -> int:
     return sum(v for k, v in normalized.items() if k not in excluded)
 
-def _rate_bases(title: str, normalized: dict[str, int]) -> tuple[int, int]:
+def _rate_values(title: str, normalized: dict[str, int]) -> tuple[int, int, int, int]:
+    pass_count = normalized.get("PASS", 0)
+    skip_count = normalized.get("SKIP", 0)
+    fail_count = normalized.get("FAIL", 0)
+
     if "Tuning" in title:
-        return (
-            _sum_excluding(normalized, {"NA"}),
-            _sum_excluding(normalized, {"NULL", "SKIP"}),
-        )
-    if "SQL" in title:
-        return (
-            sum(normalized.values()),
-            _sum_excluding(normalized, {"NA", "SKIP"}),
-        )
-    return (
-        sum(normalized.values()),
-        _sum_excluding(normalized, _SUCCESS_EXCLUDED),
-    )
+        progress_count = pass_count + skip_count
+        progress_base = _sum_excluding(normalized, {"NA", "NULL"})
+    else:
+        progress_count = pass_count
+        progress_base = _sum_excluding(normalized, _PROGRESS_EXCLUDED)
+
+    success_count = pass_count
+    success_base = pass_count + fail_count
+    return progress_count, progress_base, success_count, success_base
 
 def _rate_html(title: str, summary: dict) -> str:
     normalized: dict[str, int] = {}
     for k, v in summary.items():
         normalized[_norm_status(k)] = normalized.get(_norm_status(k), 0) + int(v or 0)
 
-    pass_count = normalized.get("PASS", 0)
-    progress_base, success_base = _rate_bases(title, normalized)
+    progress_count, progress_base, success_count, success_base = _rate_values(title, normalized)
+    if "Tuning" in title:
+        rate_note = "진척률=(PASS+SKIP)/(NA,NULL 제외), 성공률=PASS/(PASS+FAIL)"
+    else:
+        rate_note = "진척률=PASS/(NA 제외), 성공률=PASS/(PASS+FAIL)"
 
     return f"""
       <div class="rate-grid">
         <div class="rate-box">
           <div class="rate-label">진척률</div>
-          <div class="rate-value">{_pct(pass_count, progress_base)}</div>
-          <div class="rate-sub">{pass_count}/{progress_base}건</div>
+          <div class="rate-value">{_pct(progress_count, progress_base)}</div>
+          <div class="rate-sub">{progress_count}/{progress_base}건</div>
         </div>
         <div class="rate-box">
           <div class="rate-label">성공률</div>
-          <div class="rate-value">{_pct(pass_count, success_base)}</div>
-          <div class="rate-sub">{pass_count}/{success_base}건</div>
+          <div class="rate-value">{_pct(success_count, success_base)}</div>
+          <div class="rate-sub">{success_count}/{success_base}건</div>
         </div>
       </div>
+      <div class="rate-note">{rate_note}</div>
     """
 
 def _status_card(title: str, summary: dict):

@@ -334,7 +334,7 @@ python scripts/add_sql_info_classification_columns.py
 - `SQL_LENGTH`: `SHORT` when `FR_SQL_TEXT` is 5000 chars or less and `EDIT_FR_SQL`, if present, is also 5000 chars or less. Otherwise `LONG`.
 - `MAP_TYPE`: `COMPLEX` when any matched mapping row for the SQL target tables has `NEXT_MIG_INFO.MAP_TYPE = 'COMPLEX'`. Otherwise `SIMPLE` when all matched mappings are simple.
 
-## Current SQL/Tuning workflow
+## Current SQL Conversion/Tuning workflow
 
 Supervisor mode flags:
 
@@ -364,30 +364,54 @@ SQL Conversion polling uses `NEXT_SQL_INFO.STATUS`:
 
 SQL Tuning polling uses `NEXT_SQL_INFO.TUNED_TEST` while requiring `STATUS='PASS'` and `TO_SQL_TEXT IS NOT NULL`:
 
-- Included: `URGENT`, `READY`, `FAIL`, `NULL`, and any value other than `PASS` or `SKIP`
-- Excluded: `PASS`, `SKIP`
-- Ordering: `URGENT` -> `READY` -> `FAIL` -> `NULL` -> other, then `UPD_TS`, `SPACE_NM`, `SQL_ID`.
+- Included: `URGENT`, `READY`, `FAIL`
+- Excluded: `NULL`, `PASS`, `SKIP`, `NA`
+- Ordering: `URGENT` -> `READY` -> `FAIL`, then `UPD_TS`, `SPACE_NM`, `SQL_ID`.
+- `TUNED_TEST IS NULL` is not a tuning target. A SQL conversion success must explicitly set `TUNED_TEST='READY'` before the separate tuning queue can pick it up.
 
-SELECT flow:
+SQL Conversion SELECT flow:
 
 ```text
 TO-BE SQL generation
   -> source/target validation
-  -> if validation PASS: TO-BE tuning
-  -> tuned SQL validation
-  -> if tuned validation PASS: rule HIT_CNT update and indent formatting
+  -> if validation PASS: STATUS='PASS', TUNED_TEST='READY'
+  -> if validation FAIL: retry or STATUS='FAIL'
 ```
 
-INSERT/UPDATE/DELETE flow:
+SQL Conversion INSERT/UPDATE/DELETE flow:
 
 ```text
 TO-BE SQL generation
   -> validation skip
+  -> STATUS='PASS', TUNED_TEST='READY'
+```
+
+SQL Tuning SELECT flow:
+
+```text
+TUNED_TEST in ('URGENT', 'READY', 'FAIL') and STATUS='PASS'
+  -> TO-BE tuning
+  -> tuned SQL validation
+  -> if tuned validation PASS: TUNED_TEST='PASS', rule HIT_CNT update, indent formatting
+  -> if tuned validation FAIL: TUNED_TEST='FAIL'
+```
+
+SQL Tuning INSERT/UPDATE/DELETE flow:
+
+```text
+TUNED_TEST in ('URGENT', 'READY', 'FAIL') and STATUS='PASS'
   -> TO-BE tuning
   -> tuned SQL validation skip
   -> TUNED_TEST='SKIP'
   -> indent formatting
 ```
+
+Dashboard rate calculations:
+
+- General progress rate: `PASS / (all statuses except NA)`.
+- General success rate: `PASS / (PASS + FAIL)`.
+- Tuning progress rate: `(PASS + SKIP) / (all TUNED_TEST statuses except NA and NULL)`.
+- Tuning success rate: `PASS / (PASS + FAIL)`. `SKIP` is excluded from both numerator and denominator because tuning SQL was generated but validation was intentionally skipped.
 
 Tuning LLM output is required to be one JSON object:
 

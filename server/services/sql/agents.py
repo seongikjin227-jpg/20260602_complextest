@@ -441,10 +441,8 @@ class TobeMultiAgentCoordinator:
     ) -> None:
         self.mapping_rule_provider = mapping_rule_provider or MappingRuleProvider()
         self.generation_agent = generation_agent or TobeSqlGenerationAgent()
-        self.tuning_agent = tuning_agent or SqlTuningAgent()
         self.graph = build_migration_workflow(
             generation_agent=self.generation_agent,
-            tuning_agent=self.tuning_agent,
         )
 
     def process_job(self, job) -> str:
@@ -630,7 +628,7 @@ class TobeMultiAgentCoordinator:
             tobe_sql=state.tobe_sql,
             tuned_sql=state.tuned_sql or None,
             tuned_result=state.tuned_result or None,
-            tuned_test=state.tuned_test,
+            tuned_test=state.tuned_test or "READY",
             bind_sql="",
             bind_set=None,
             test_sql="",

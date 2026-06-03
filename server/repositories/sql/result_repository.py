@@ -258,7 +258,7 @@ def get_tuning_jobs() -> list:
                TO_SQL_TEXT, {tuned_sql_column}, TUNED_TEST, BIND_SQL, BIND_SET, TEST_SQL, STATUS, LOG,
                UPD_TS, EDITED_YN, {fr_bindtuned_sql_column}, {select_correct_cols}, {sql_length_column}, {map_type_column}, {formatted_sql_column}, {tuned_result_column}
         FROM {table}
-        WHERE (TUNED_TEST IS NULL OR UPPER(TRIM(TUNED_TEST)) NOT IN ('PASS', 'SKIP'))
+        WHERE UPPER(TRIM(TUNED_TEST)) IN ('URGENT', 'READY', 'FAIL')
           AND TO_SQL_TEXT IS NOT NULL
           AND UPPER(TRIM(STATUS)) = 'PASS'
           {batch_limit_clause}
@@ -267,7 +267,6 @@ def get_tuning_jobs() -> list:
             WHEN UPPER(TRIM(TUNED_TEST)) = 'URGENT' THEN 1
             WHEN UPPER(TRIM(TUNED_TEST)) = 'READY' THEN 2
             WHEN UPPER(TRIM(TUNED_TEST)) = 'FAIL' THEN 3
-            WHEN TUNED_TEST IS NULL THEN 4
             ELSE 9
           END,
           UPD_TS NULLS FIRST,
