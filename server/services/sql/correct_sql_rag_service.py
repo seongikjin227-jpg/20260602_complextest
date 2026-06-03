@@ -68,8 +68,6 @@ class CorrectSqlHintRagService:
 
     @staticmethod
     def _is_search_candidate(row: dict[str, str], current_row_id: str | None) -> bool:
-        if current_row_id and str(row.get("row_id", "")).strip() == str(current_row_id).strip():
-            return False
         if not (row.get("correct_sql") or "").strip():
             return False
         return bool(CorrectSqlHintRagService._effective_fr_sql(row))
