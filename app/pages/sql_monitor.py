@@ -1,14 +1,15 @@
-import streamlit as st
 import pandas as pd
-from utils.db import get_sql_jobs, get_sql_job_full
+import streamlit as st
+
+from utils.db import get_sql_job_full, get_sql_jobs
 
 _COLS_TABLE = ["ROW_ID", "SQL_ID", "SPACE_NM", "TAG_KIND", "STATUS", "UPD_TS"]
 
 
 def render():
-    st.title("🔄 SQL Agent Monitor")
+    st.title("SQL Agent Monitor")
 
-    if st.button("🔄 새로고침"):
+    if st.button("새로고침"):
         st.rerun()
 
     try:
@@ -23,11 +24,10 @@ def render():
 
     df_all = pd.DataFrame(jobs)
 
-    # ── 필터 ──────────────────────────────────────────────────────────────────
-    with st.expander("🔍 검색 / 필터", expanded=True):
+    with st.expander("검색 / 필터", expanded=True):
         c1, c2, c3 = st.columns(3)
         with c1:
-            keyword = st.text_input("SQL_ID 검색", placeholder="예) SEL_001")
+            keyword = st.text_input("SQL_ID 검색", placeholder="예: SEL_001")
         with c2:
             statuses = ["전체"] + sorted(df_all["STATUS"].dropna().unique().tolist())
             sel_status = st.selectbox("STATUS", statuses)
@@ -47,7 +47,6 @@ def render():
     st.write(f"**{len(df)}건** 조회됨")
     st.dataframe(df[show_cols], width="stretch", hide_index=True)
 
-    # ── 상세 조회 ─────────────────────────────────────────────────────────────
     st.divider()
     st.subheader("SQL 상세 조회")
 
@@ -55,7 +54,7 @@ def render():
     if not row_ids:
         return
 
-    labels = [f"{r['SQL_ID']} ({r['STATUS']})" for _, r in df.iterrows()]
+    labels = [f"{r['SPACE_NM']} / {r['SQL_ID']} ({r['STATUS']})" for _, r in df.iterrows()]
     idx = st.selectbox("항목 선택", range(len(labels)), format_func=lambda i: labels[i])
 
     sel_row_id = row_ids[idx]
@@ -65,25 +64,21 @@ def render():
 
     detail = get_sql_job_full(sel_row_id) or row
 
-    with st.expander("📋 로그", expanded=True):
+    with st.expander("로그", expanded=True):
         log = detail.get("LOG") or ""
         if log:
             st.text_area("LOG", log, height=200, label_visibility="collapsed")
         else:
             st.info("로그 없음")
 
-    origin_sql = detail.get("EDIT_FR_SQL") or detail.get("FR_SQL_TEXT") or "(없음)"
-    bind_sql = detail.get("BIND_SQL") or "(없음)"
-    test_sql = detail.get("TEST_SQL") or "(없음)"
+    asis_sql = detail.get("EDIT_FR_SQL") or detail.get("FR_SQL_TEXT") or "(없음)"
+    tobe_sql = detail.get("TO_SQL_TEXT") or "(없음)"
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     with col1:
         edited = bool(detail.get("EDIT_FR_SQL"))
-        st.caption(f"원본 SQL (AS-IS){' · 수정본' if edited else ''}")
-        st.code(origin_sql, language="sql")
+        st.caption(f"ASIS SQL{' · 수정본' if edited else ''}")
+        st.code(asis_sql, language="sql")
     with col2:
-        st.caption("BIND_SQL")
-        st.code(bind_sql, language="sql")
-    with col3:
-        st.caption("TEST_SQL")
-        st.code(test_sql, language="sql")
+        st.caption("TOBE SQL")
+        st.code(tobe_sql, language="sql")

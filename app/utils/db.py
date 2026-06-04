@@ -215,6 +215,7 @@ def get_sql_job_full(row_id: str) -> dict | None:
                FR_SQL_TEXT, EDIT_FR_SQL, TARGET_TABLE,
                TO_SQL_TEXT, TUNED_SQL, TUNED_TEST, TUNED_RESULT,
                BIND_SQL, BIND_SET, TEST_SQL,
+               FORMATTED_SQL, BLOCK_RAG_CONTENT,
                STATUS, LOG, TO_CHAR(UPD_TS) AS UPD_TS, EDITED_YN
         FROM {SQL_TABLE}
         WHERE ROWIDTOCHAR(ROWID) = :1
