@@ -95,9 +95,10 @@ SQL conversion 단계에서 `NEXT_SQL_INFO.TARGET_TABLE`과 일치하는 활성 
 - complex flow의 `mapping_schema_text`는 `[SIMPLE_MAPPING_RULES]`, `[COMPLEX_GENERAL_RULES]`, `[COMPLEX_SEARCH_RULES_TOP_K]`를 함께 전달합니다.
 - simple flow는 기존처럼 `NEXT_MIG_INFO` / `NEXT_MIG_INFO_DTL`의 `FROM_TABLE / FROM_COLUMN / TO_TABLE / TO_COLUMN` 반복 구조만 사용합니다.
 - complex flow는 `NEXT_SQL_COMPLEX_MAP`의 `GENERAL` rule 전체와 `SEARCH` rule top-k를 `mapping_schema_text`에 전달합니다.
+- LLM prompt에는 `MAP_ID`, `MAP_KIND`, 검색 점수 같은 내부 메타데이터를 전달하지 않습니다.
 - `SEARCH` rule은 `EDIT_FR_SQL`이 있으면 해당 SQL, 없으면 `FR_SQL_TEXT`를 query로 사용하고 `FR_COL`만 embedding 대상으로 검색
 - `COMPLEX_MAP_SEARCH_TOP_K`로 SEARCH rule 검색 건수를 조정합니다.
-- complex prompt에는 `DESCRIPTION` CLOB을 포함해 column/조건/depth/parent 관계 설명을 전달
+- complex prompt에는 `MAP_ID`, `MAP_KIND`, 검색 점수, `DESCRIPTION` 같은 내부/보조 메타데이터를 전달하지 않습니다.
 - complex prompt에서는 `correct_sql_hint_json`을 제외합니다.
 
 DDL 생성:

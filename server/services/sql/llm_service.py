@@ -109,8 +109,8 @@ def _serialize_next_sql_complex_mapping_rules(
     sections.append("[COMPLEX_GENERAL_RULES]")
     if not general_rules:
         sections.append("- (empty)")
-    for rule in general_rules:
-        sections.extend(_format_complex_map_rule(rule, target_schema=target_schema, include_score=False))
+    for rank, rule in enumerate(general_rules, start=1):
+        sections.extend(_format_complex_map_rule(rule, target_schema=target_schema, rank=rank))
 
     sections.append("")
     sections.append("[COMPLEX_SEARCH_RULES_TOP_K]")
@@ -121,7 +121,6 @@ def _serialize_next_sql_complex_mapping_rules(
             _format_complex_map_rule(
                 rule,
                 target_schema=target_schema,
-                include_score=True,
                 rank=rank,
             )
         )
@@ -131,16 +130,10 @@ def _serialize_next_sql_complex_mapping_rules(
 def _format_complex_map_rule(
     rule: ComplexMappingRuleItem,
     target_schema: str,
-    include_score: bool,
     rank: int | None = None,
 ) -> list[str]:
-    label = f"SEARCH_RULE_{rank}" if rank is not None else f"MAP_ID_{rule.map_id}"
+    label = f"COMPLEX_RULE_{rank}" if rank is not None else "COMPLEX_RULE"
     lines = [f"\n## {label}"]
-    lines.append(f"MAP_ID={rule.map_id}")
-    lines.append(f"MAP_KIND={(rule.map_kind or '').strip().upper()}")
-    if include_score:
-        lines.append(f"SEARCH_SCORE={rule.search_score if rule.search_score is not None else ''}")
-        lines.append(f"SEARCH_METHOD={rule.search_method or ''}")
     lines.append(f"FR_TABLE={(rule.fr_table or '').strip()}")
     lines.append("FR_COL_OR_PATTERN:")
     lines.append("```sql")
@@ -151,8 +144,6 @@ def _format_complex_map_rule(
     lines.append("```sql")
     lines.append((rule.to_col or "").strip() or "(empty)")
     lines.append("```")
-    lines.append("DESCRIPTION:")
-    lines.append((rule.description or "").strip() or "(empty)")
     return lines
 
 

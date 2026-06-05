@@ -825,10 +825,10 @@ NEXT_SQL_COMPLEX_MAP:
   FR_COL = 단일 source column 또는 AS-IS SQL pattern
   TO_TABLE = TO-BE table명
   TO_COL = 단일 TO-BE column 또는 TO-BE SQL pattern
-  DESCRIPTION = 의미 변환, 조건, depth, parent 관계 설명
   SIMPLE_MAPPING_RULES = complex table에 없는 target table의 기존 NEXT_MIG_INFO mapping
   COMPLEX_GENERAL_RULES = complex table에 있는 target table의 GENERAL rule 전부
   COMPLEX_SEARCH_RULES_TOP_K = complex table에 있는 target table의 SEARCH rule 중 FR_COL 기준 vector search top-k
+  MAP_ID, MAP_KIND, 검색 점수, DESCRIPTION은 prompt에 전달하지 않음
   correct SQL hint는 제외
 ```
 
