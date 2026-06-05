@@ -1,10 +1,11 @@
 """Supervisor Agent.
 
-LLM이 3개의 에이전트를 tool로 직접 호출하는 ReAct 패턴으로 동작합니다.
+LLM이 4개의 에이전트를 tool로 직접 호출하는 ReAct 패턴으로 동작합니다.
 
   Tool 1: run_data_migration  — 데이터 이관 (DataMigrationAgent)
   Tool 2: run_sql_conversion  — SQL 변환   (SqlConversionAgent)
   Tool 3: run_sql_tuning      — SQL 튜닝   (SqlTuningAgent)
+  Tool 4: run_sql_formatting  — SQL 포맷팅 (SqlFormattingAgent)
 """
 
 import logging
@@ -29,26 +30,31 @@ class SupervisorAgent:
         )
         from server.agents.migration.orchestrator import MigrationOrchestrator
         from server.repositories.sql.result_repository import (
+            get_formatting_jobs as get_formatting_jobs_func,
             get_pending_jobs as get_sql_jobs,
             get_tuning_jobs as get_tuning_jobs_func,
             increment_batch_count as sql_inc,
         )
         from server.agents.sql_conversion.agent import SqlConversionAgent
+        from server.agents.sql_formatting.agent import SqlFormattingAgent
         from server.agents.sql_tuning.agent import SqlTuningAgent
 
         dm = MigrationOrchestrator()
         sql_conversion = SqlConversionAgent()
         sql_tuning = SqlTuningAgent()
+        sql_formatting = SqlFormattingAgent()
 
         self._graph = build_supervisor_graph(
             get_migration_jobs=get_mig_jobs,
             get_sql_jobs=get_sql_jobs,
             get_tuning_jobs=get_tuning_jobs_func,
+            get_formatting_jobs=get_formatting_jobs_func,
             mig_increment_batch=mig_inc,
             mig_process_job=dm.process_job,
             sql_increment_batch=sql_inc,
             sql_process_job=sql_conversion.process_job,
             tune_process_job=sql_tuning.process_job,
+            format_process_job=sql_formatting.process_job,
             logger=logger,
         )
 
@@ -58,7 +64,8 @@ class SupervisorAgent:
         logger.info(" Multi-Agent Supervisor 시작 (Deterministic Batch Mode)")
         logger.info("  ├─ Tool 1: run_data_migration  — 데이터 이관")
         logger.info("  ├─ Tool 2: run_sql_conversion  — SQL 변환")
-        logger.info("  └─ Tool 3: run_sql_tuning      — SQL 튜닝")
+        logger.info("  ├─ Tool 3: run_sql_tuning      — SQL 튜닝")
+        logger.info("  └─ Tool 4: run_sql_formatting  — SQL 포맷팅")
         logger.info("============================================================")
 
         self._register_signal_handlers()

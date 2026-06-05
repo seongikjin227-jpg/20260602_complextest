@@ -286,6 +286,53 @@ def get_tuning_jobs() -> list:
     return jobs
 
 
+def get_formatting_jobs() -> list[SqlInfoJob]:
+    """Return tuned rows that still need FORMATTED_SQL generation."""
+    table = get_result_table()
+    available_columns = _get_available_columns(table)
+    if "FORMATTED_SQL" not in available_columns or "TUNED_TEST" not in available_columns:
+        return []
+
+    select_correct_cols = ", ".join(
+        column
+        if column in available_columns
+        else f"CAST(NULL AS VARCHAR2(4000)) AS {column}"
+        for column in ("TOBE_CORRECT_SQL", "BIND_CORRECT_SQL", "TEST_CORRECT_SQL")
+    )
+    tuned_sql_column = "TUNED_SQL" if "TUNED_SQL" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS TUNED_SQL"
+    fr_bindtuned_sql_column = "FR_BINDTUNED_SQL" if "FR_BINDTUNED_SQL" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS FR_BINDTUNED_SQL"
+    sql_length_column = "SQL_LENGTH" if "SQL_LENGTH" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS SQL_LENGTH"
+    map_type_column = "MAP_TYPE" if "MAP_TYPE" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS MAP_TYPE"
+    tuned_result_column = "TUNED_RESULT" if "TUNED_RESULT" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS TUNED_RESULT"
+    batch_limit_clause = _get_batch_limit_clause(available_columns)
+
+    query = f"""
+        SELECT ROWIDTOCHAR(ROWID) AS RID,
+               TAG_KIND, SPACE_NM, SQL_ID, FR_SQL_TEXT, TARGET_TABLE, EDIT_FR_SQL,
+               TO_SQL_TEXT, {tuned_sql_column}, TUNED_TEST, BIND_SQL, BIND_SET, TEST_SQL, STATUS, LOG,
+               UPD_TS, EDITED_YN, {fr_bindtuned_sql_column}, {select_correct_cols}, {sql_length_column}, {map_type_column}, FORMATTED_SQL, {tuned_result_column}
+        FROM {table}
+        WHERE UPPER(TRIM(TUNED_TEST)) IN ('PASS', 'SKIP')
+          AND FORMATTED_SQL IS NULL
+          {batch_limit_clause}
+        ORDER BY
+          UPD_TS NULLS FIRST,
+          TO_CHAR(SPACE_NM),
+          TO_CHAR(SQL_ID)
+    """
+
+    jobs: list[SqlInfoJob] = []
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query)
+            for row in cursor.fetchall():
+                jobs.append(_row_to_sql_info_job(row))
+    except Exception as e:
+        logger.error(f"[Repo] SqlFormatting pending job lookup failed: {e}")
+    return jobs
+
+
 def update_tuning_error(row_id: str, error_msg: str, tuned_sql: str | None = None) -> None:
     """Record a tuning error and mark the row as retryable FAIL."""
     table = get_result_table()
@@ -447,6 +494,29 @@ def update_block_rag_content(row_id: str, block_rag_content: str) -> None:
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(query, [payload["BLOCK_RAG_CONTENT"], row_id])
+        conn.commit()
+
+
+def update_formatted_sql(row_id: str, formatted_sql: str) -> None:
+    table = get_result_table()
+    available_columns = _get_available_columns(table)
+    if "FORMATTED_SQL" not in available_columns:
+        logger.warning("[Repo] FORMATTED_SQL column is not available; formatted SQL was not saved.")
+        return
+
+    payload = _fit_payload_to_column_limits(
+        table=table,
+        values={"FORMATTED_SQL": formatted_sql},
+    )
+    query = f"""
+        UPDATE {table}
+        SET FORMATTED_SQL = :1,
+            UPD_TS = CURRENT_TIMESTAMP
+        WHERE ROWID = CHARTOROWID(:2)
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(query, [payload["FORMATTED_SQL"], row_id])
         conn.commit()
 
 

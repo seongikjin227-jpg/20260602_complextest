@@ -73,6 +73,23 @@ class TobeSqlGenerationAgent:
         self.validate(state)
 
     def generate(self, state: JobExecutionState) -> None:
+        correct_sql = self._correct_sql(getattr(state.job, "tobe_correct_sql", None))
+        if correct_sql:
+            state.tobe_sql = correct_sql
+            self._log_sql_execution(
+                state=state,
+                sql_kind="TOBE_SQL",
+                sql_content=state.tobe_sql,
+                status="SUCCESS",
+                stage_name="USE_TOBE_CORRECT_SQL",
+                elapsed_seconds=0,
+            )
+            logger.info(
+                f"[{self.name}] ({state.job_key}) stage=USE_TOBE_CORRECT_SQL "
+                f"completed (sql_length={len(state.tobe_sql)})"
+            )
+            return
+
         state.tobe_sql = generate_tobe_sql(
             job=state.job,
             mapping_rules=state.mapping_rules,
@@ -84,9 +101,14 @@ class TobeSqlGenerationAgent:
         )
 
     def validate(self, state: JobExecutionState) -> None:
-        bind_param_names = extract_bind_param_names(state.job.source_sql) or extract_bind_param_names(state.tobe_sql)
+        correct_bind_sql = self._correct_sql(getattr(state.job, "bind_correct_sql", None))
+        bind_param_names = (
+            extract_bind_param_names(state.job.source_sql)
+            or extract_bind_param_names(state.tobe_sql)
+            or extract_bind_param_names(correct_bind_sql)
+        )
         state.bind_param_names = bind_param_names
-        if not bind_param_names:
+        if not bind_param_names and not correct_bind_sql:
             state.bind_sql = ""
             state.bind_set_for_db = None
             state.bind_set_json_for_test = "[{}]"
@@ -100,11 +122,26 @@ class TobeSqlGenerationAgent:
                 )
 
             bind_source_sql = self._prepare_bind_source_sql(state)
-            state.bind_sql = generate_bind_sql(
-                job=state.job,
-                last_error=state.last_error,
-                bind_source_sql=bind_source_sql,
-            )
+            if correct_bind_sql:
+                state.bind_sql = correct_bind_sql
+                self._log_sql_execution(
+                    state=state,
+                    sql_kind="BIND_SQL",
+                    sql_content=state.bind_sql,
+                    status="SUCCESS",
+                    stage_name="USE_BIND_CORRECT_SQL",
+                    elapsed_seconds=0,
+                )
+                logger.info(
+                    f"[{self.name}] ({state.job_key}) stage=USE_BIND_CORRECT_SQL "
+                    f"completed (sql_length={len(state.bind_sql)})"
+                )
+            else:
+                state.bind_sql = generate_bind_sql(
+                    job=state.job,
+                    last_error=state.last_error,
+                    bind_source_sql=bind_source_sql,
+                )
             logger.info(
                 f"[{self.name}] ({state.job_key}) stage=GENERATE_BIND_SQL "
                 f"completed (sql_length={len(state.bind_sql)}, final_retry_mode={'ON' if bind_final_retry_mode else 'OFF'})"
@@ -155,12 +192,28 @@ class TobeSqlGenerationAgent:
                 "enabled (template=test_sql_final_retry_prompt.json)"
             )
 
-        state.test_sql = generate_test_sql(
-            job=state.job,
-            tobe_sql=state.tobe_sql,
-            bind_set_json=state.bind_set_json_for_test,
-            last_error=state.last_error,
-        )
+        correct_test_sql = self._correct_sql(getattr(state.job, "test_correct_sql", None))
+        if correct_test_sql:
+            state.test_sql = correct_test_sql
+            self._log_sql_execution(
+                state=state,
+                sql_kind="TEST_SQL",
+                sql_content=state.test_sql,
+                status="SUCCESS",
+                stage_name="USE_TEST_CORRECT_SQL",
+                elapsed_seconds=0,
+            )
+            logger.info(
+                f"[{self.name}] ({state.job_key}) stage=USE_TEST_CORRECT_SQL "
+                f"completed (sql_length={len(state.test_sql)})"
+            )
+        else:
+            state.test_sql = generate_test_sql(
+                job=state.job,
+                tobe_sql=state.tobe_sql,
+                bind_set_json=state.bind_set_json_for_test,
+                last_error=state.last_error,
+            )
         logger.info(
             f"[{self.name}] ({state.job_key}) stage=GENERATE_TEST_SQL "
             f"completed (sql_length={len(state.test_sql)}, final_retry_mode={'ON' if final_retry_mode else 'OFF'})"
@@ -199,6 +252,10 @@ class TobeSqlGenerationAgent:
             f"completed (status={state.status})"
         )
 
+
+    @staticmethod
+    def _correct_sql(value: str | None) -> str:
+        return (value or "").strip()
 
 
     def _prepare_bind_source_sql(self, state: JobExecutionState) -> str:

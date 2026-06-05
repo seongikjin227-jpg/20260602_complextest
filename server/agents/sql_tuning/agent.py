@@ -38,9 +38,10 @@ class SqlTuningAgent:
             self._agent.run(state)
 
             final_status = state.tuned_test if state.tuned_test else "FAIL"
-            final_log = (
-                f"TUNING COMPLETED status={final_status} "
-                f"job={job_key} (changed={bool(state.tuned_sql)})"
+            final_log = self._build_final_log(
+                state=state,
+                final_status=final_status,
+                job_key=job_key,
             )
             update_cycle_result(
                 row_id=job.row_id,
@@ -66,3 +67,43 @@ class SqlTuningAgent:
                 tuned_sql=state.tuned_sql if state and state.tuned_sql else None,
             )
             return "FAIL"
+
+    @staticmethod
+    def _get_case_insensitive_value(row: dict, key: str):
+        lowered = key.lower()
+        for existing_key, value in row.items():
+            if str(existing_key).lower() == lowered:
+                return value
+        return None
+
+    @classmethod
+    def _summarize_tuned_test_rows(cls, rows: list[dict]) -> str:
+        if not rows:
+            return "no_tuned_test_rows"
+
+        samples: list[str] = []
+        for row in rows[:5]:
+            case_no = cls._get_case_insensitive_value(row, "case_no")
+            baseline_count = cls._get_case_insensitive_value(row, "from_count")
+            tuned_count = cls._get_case_insensitive_value(row, "to_count")
+            samples.append(
+                f"CASE_NO={case_no},BASELINE_COUNT={baseline_count},TUNED_COUNT={tuned_count}"
+            )
+        return " ; ".join(samples)
+
+    @classmethod
+    def _build_final_log(
+        cls,
+        state: JobExecutionState,
+        final_status: str,
+        job_key: str,
+    ) -> str:
+        base_log = (
+            f"TUNING COMPLETED status={final_status} "
+            f"job={job_key} changed={bool(state.tuned_sql)}"
+        )
+        if final_status == "FAIL":
+            reason = state.last_error or "TUNED_TEST_VALIDATION_FAIL"
+            details = cls._summarize_tuned_test_rows(state.tuned_test_rows)
+            return f"{base_log} reason={reason} details={details}"
+        return base_log

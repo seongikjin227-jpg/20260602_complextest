@@ -207,7 +207,7 @@ def _call_llm(chat_messages: list[dict]) -> str:
 _ICON = {"PASS": "✅", "FAIL": "❌", "RUNNING": "🔄", "READY": "🔵",
          "SKIP": "⏭️", "NA": "🚫", "NULL": "⚫", "PENDING": "🟣"}
 _CLR  = {"PASS": "badge-pass", "FAIL": "badge-fail"}
-_STATUS_ORDER = ["PASS", "FAIL", "RUNNING", "READY", "SKIP", "NA", "PENDING", "NULL"]
+_STATUS_ORDER = ["PASS", "FAIL", "RUNNING", "SKIP", "PENDING", "NULL"]
 _PROGRESS_EXCLUDED = {"NA"}
 
 def _norm_status(status) -> str:
@@ -220,6 +220,14 @@ def _pct(numerator: int, denominator: int) -> str:
 
 def _sum_excluding(normalized: dict[str, int], excluded: set[str]) -> int:
     return sum(v for k, v in normalized.items() if k not in excluded)
+
+def _dashboard_status(status) -> str | None:
+    normalized = _norm_status(status)
+    if normalized == "NA":
+        return None
+    if normalized in {"URGENT", "READY"}:
+        return "RUNNING"
+    return normalized
 
 def _rate_values(title: str, normalized: dict[str, int]) -> tuple[int, int, int, int]:
     pass_count = normalized.get("PASS", 0)
@@ -240,7 +248,10 @@ def _rate_values(title: str, normalized: dict[str, int]) -> tuple[int, int, int,
 def _rate_html(title: str, summary: dict) -> str:
     normalized: dict[str, int] = {}
     for k, v in summary.items():
-        normalized[_norm_status(k)] = normalized.get(_norm_status(k), 0) + int(v or 0)
+        status = _dashboard_status(k)
+        if status is None:
+            continue
+        normalized[status] = normalized.get(status, 0) + int(v or 0)
 
     progress_count, progress_base, success_count, success_base = _rate_values(title, normalized)
     if "Tuning" in title:
@@ -265,16 +276,23 @@ def _rate_html(title: str, summary: dict) -> str:
     """
 
 def _status_card(title: str, summary: dict):
-    if not summary:
+    normalized_summary: dict[str, int] = {}
+    for k, v in summary.items():
+        status = _dashboard_status(k)
+        if status is None:
+            continue
+        normalized_summary[status] = normalized_summary.get(status, 0) + int(v or 0)
+
+    if not normalized_summary:
         st.markdown(f"""
         <div class="stat-card">
           <div class="stat-card-title">{title}</div>
           <span style="color:#9ca3af;font-size:13px">데이터 없음</span>
         </div>""", unsafe_allow_html=True)
         return
-    total = sum(summary.values())
+    total = sum(normalized_summary.values())
     rows  = ""
-    for k, v in sorted(summary.items(),
+    for k, v in sorted(normalized_summary.items(),
                        key=lambda x: _STATUS_ORDER.index(x[0]) if x[0] in _STATUS_ORDER else 99):
         icon  = _ICON.get(k, "◻️")
         cls   = _CLR.get(k, "badge-etc")
@@ -285,7 +303,7 @@ def _status_card(title: str, summary: dict):
     st.markdown(f"""
     <div class="stat-card">
       <div class="stat-card-title">{title} &nbsp;<span style="font-weight:400;color:#adb5bd">총 {total}건</span></div>
-      {_rate_html(title, summary)}
+      {_rate_html(title, normalized_summary)}
       {rows}
     </div>""", unsafe_allow_html=True)
 
@@ -298,6 +316,10 @@ def render():
         st.session_state.current_chat = _new_chat()
     if "chat_refresh" not in st.session_state:
         st.session_state.chat_refresh = False
+    if "chat_pending_response" not in st.session_state:
+        st.session_state.chat_pending_response = False
+    if "chat_pending_id" not in st.session_state:
+        st.session_state.chat_pending_id = None
 
     chat = st.session_state.current_chat
 
@@ -362,6 +384,24 @@ def render():
             for msg in chat["messages"]:
                 with st.chat_message(msg["role"]):
                     st.markdown(msg["content"])
+            if (
+                st.session_state.chat_pending_response
+                and st.session_state.chat_pending_id == chat["id"]
+            ):
+                with st.chat_message("assistant"):
+                    placeholder = st.empty()
+                    placeholder.markdown("입력중...")
+                    try:
+                        answer = _call_llm(chat["messages"])
+                    except Exception as e:
+                        answer = f"⚠️ LLM 호출 실패: {e}"
+                    placeholder.markdown(answer)
+                chat["messages"].append({"role": "assistant", "content": answer})
+                _save_chat(chat)
+                st.session_state.current_chat = chat
+                st.session_state.chat_pending_response = False
+                st.session_state.chat_pending_id = None
+                st.rerun()
 
         # 입력
         user_input = st.chat_input("메시지를 입력하세요...", key="chat_input")
@@ -397,18 +437,8 @@ def render():
         if chat["title"] == "새 대화":
             chat["title"] = user_input.strip()[:24]
 
-        # LLM 호출
-        with center:
-            with st.chat_message("assistant"):
-                placeholder = st.empty()
-                placeholder.markdown("⏳ 답변 생성 중...")
-                try:
-                    answer = _call_llm(chat["messages"])
-                except Exception as e:
-                    answer = f"⚠️ LLM 호출 실패: {e}"
-                placeholder.markdown(answer)
-
-        chat["messages"].append({"role": "assistant", "content": answer})
         _save_chat(chat)
         st.session_state.current_chat = chat
+        st.session_state.chat_pending_response = True
+        st.session_state.chat_pending_id = chat["id"]
         st.rerun()

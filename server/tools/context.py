@@ -14,6 +14,7 @@ from server.repositories.supervisor.metrics_repository import (
 mig_registry: dict = {}
 sql_registry: dict = {}
 tuning_registry: dict = {}
+formatting_registry: dict = {}
 
 # ── 실행 콜백 (에이전트 초기화 시 주입) ─────────────────────────────────────────
 callbacks: dict = {}
@@ -29,7 +30,7 @@ def init_callbacks(**kwargs):
 
 def get_registries():
     """레지스트리 참조를 반환합니다."""
-    return mig_registry, sql_registry, tuning_registry
+    return mig_registry, sql_registry, tuning_registry, formatting_registry
 
 
 def start_batch_metrics(batch_no: int) -> None:

@@ -21,10 +21,12 @@ import server.tools as supervisor_tools
 _DB_MIGRATION_ONLY = os.getenv("DB_MIGRATION_ONLY", "false").lower() == "true"
 _SQL_CONVERSION_ONLY = os.getenv("SQL_CONVERSION_ONLY", "false").lower() == "true"
 _SQL_TUNING_ONLY = os.getenv("SQL_TUNING_ONLY", "false").lower() == "true"
-_HAS_AGENT_SELECTION = _DB_MIGRATION_ONLY or _SQL_CONVERSION_ONLY or _SQL_TUNING_ONLY
+_SQL_FORMATTING_ONLY = os.getenv("SQL_FORMATTING_ONLY", "false").lower() == "true"
+_HAS_AGENT_SELECTION = _DB_MIGRATION_ONLY or _SQL_CONVERSION_ONLY or _SQL_TUNING_ONLY or _SQL_FORMATTING_ONLY
 _RUN_MIGRATION = _DB_MIGRATION_ONLY or not _HAS_AGENT_SELECTION
 _RUN_SQL_CONVERSION = _SQL_CONVERSION_ONLY or not _HAS_AGENT_SELECTION
 _RUN_SQL_TUNING = _SQL_TUNING_ONLY or not _HAS_AGENT_SELECTION
+_RUN_SQL_FORMATTING = _SQL_FORMATTING_ONLY or not _HAS_AGENT_SELECTION
 
 _RUNTIME_DIR = Path(__file__).resolve().parent.parent.parent.parent / "runtime"
 PAUSE_FLAG = _RUNTIME_DIR / "agent.pause"
@@ -61,16 +63,19 @@ def build_supervisor_graph(
     get_migration_jobs,
     get_sql_jobs,
     get_tuning_jobs,
+    get_formatting_jobs,
     mig_increment_batch,
     mig_process_job,
     sql_increment_batch,
     sql_process_job,
     tune_process_job,
+    format_process_job,
     logger,
 ):
     mig_registry: dict = {}
     sql_registry: dict = {}
     tuning_registry: dict = {}
+    formatting_registry: dict = {}
 
     supervisor_tools.init_callbacks(
         mig_inc=mig_increment_batch,
@@ -78,9 +83,10 @@ def build_supervisor_graph(
         sql_inc=sql_increment_batch,
         sql_proc=sql_process_job,
         tune_proc=tune_process_job,
+        format_proc=format_process_job,
         logger=logger,
     )
-    mig_registry, sql_registry, tuning_registry = supervisor_tools.get_registries()
+    mig_registry, sql_registry, tuning_registry, formatting_registry = supervisor_tools.get_registries()
 
     def poll_node(state: SupervisorState) -> dict:
         """Poll pending jobs and refresh current batch registries."""
@@ -100,7 +106,7 @@ def build_supervisor_graph(
             )
         supervisor_tools.start_cycle_metrics(cycle)
 
-        mig_jobs, sql_jobs, tuning_jobs = [], [], []
+        mig_jobs, sql_jobs, tuning_jobs, formatting_jobs = [], [], [], []
         if _RUN_MIGRATION:
             try:
                 mig_jobs = get_migration_jobs()
@@ -111,18 +117,23 @@ def build_supervisor_graph(
                 sql_jobs = get_sql_jobs()
             if _RUN_SQL_TUNING:
                 tuning_jobs = get_tuning_jobs()
+            if _RUN_SQL_FORMATTING:
+                formatting_jobs = get_formatting_jobs()
         except Exception as exc:
-            logger.error(f"[Supervisor] SQL/Tuning polling error: {exc}")
+            logger.error(f"[Supervisor] SQL/Tuning/Formatting polling error: {exc}")
 
         mig_registry.clear()
         sql_registry.clear()
         tuning_registry.clear()
+        formatting_registry.clear()
         for job in mig_jobs[:JOB_BATCH_SIZE]:
             mig_registry[job.map_id] = job
         for job in sql_jobs[:JOB_BATCH_SIZE]:
             sql_registry[str(job.row_id)] = job
         for job in tuning_jobs[:JOB_BATCH_SIZE]:
             tuning_registry[str(job.row_id)] = job
+        for job in formatting_jobs[:JOB_BATCH_SIZE]:
+            formatting_registry[str(job.row_id)] = job
 
         if mig_jobs:
             logger.info(
@@ -139,7 +150,12 @@ def build_supervisor_graph(
                 f"[Supervisor] SqlTuning 대기: {len(tuning_jobs)}건 "
                 f"/ 실행 대상: {len(tuning_registry)}건"
             )
-        if not mig_jobs and not sql_jobs and not tuning_jobs:
+        if formatting_jobs:
+            logger.info(
+                f"[Supervisor] SqlFormatting 대기: {len(formatting_jobs)}건 "
+                f"/ 실행 대상: {len(formatting_registry)}건"
+            )
+        if not mig_jobs and not sql_jobs and not tuning_jobs and not formatting_jobs:
             logger.info("[Supervisor] 대기 중인 작업 없음")
 
         return {
@@ -149,7 +165,7 @@ def build_supervisor_graph(
 
     def execute_node(state: SupervisorState) -> dict:
         """Run up to JOB_BATCH_SIZE jobs for each agent from the current poll result."""
-        if not mig_registry and not sql_registry and not tuning_registry:
+        if not mig_registry and not sql_registry and not tuning_registry and not formatting_registry:
             return {"stop_requested": _stop_event.is_set() or state.get("stop_requested", False)}
 
         logger.info("[Supervisor] 작업 실행 시작")
@@ -181,6 +197,15 @@ def build_supervisor_graph(
                 tuning_row_ids.append(str(job.row_id))
             if tuning_row_ids:
                 supervisor_tools.run_sql_tuning.invoke({"row_ids": tuning_row_ids})
+
+        if _RUN_SQL_FORMATTING:
+            formatting_row_ids = []
+            for job in list(formatting_registry.values()):
+                if _stop_event.is_set():
+                    break
+                formatting_row_ids.append(str(job.row_id))
+            if formatting_row_ids:
+                supervisor_tools.run_sql_formatting.invoke({"row_ids": formatting_row_ids})
 
         return {"stop_requested": _stop_event.is_set() or state.get("stop_requested", False)}
 

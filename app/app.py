@@ -62,20 +62,23 @@ with st.sidebar:
     db_only = env.get("DB_MIGRATION_ONLY", "false").lower() == "true"
     sql_only = env.get("SQL_CONVERSION_ONLY", "false").lower() == "true"
     tuning_only = env.get("SQL_TUNING_ONLY", "false").lower() == "true"
+    formatting_only = env.get("SQL_FORMATTING_ONLY", "false").lower() == "true"
 
     new_db_only = st.toggle("DB Migration", value=db_only)
     new_sql_only = st.toggle("SQL Conversion", value=sql_only)
     new_tuning_only = st.toggle("SQL Tuning", value=tuning_only)
+    new_formatting_only = st.toggle("SQL Formatting", value=formatting_only)
 
-    if (new_db_only, new_sql_only, new_tuning_only) != (db_only, sql_only, tuning_only):
+    if (new_db_only, new_sql_only, new_tuning_only, new_formatting_only) != (db_only, sql_only, tuning_only, formatting_only):
         write_env_key("DB_MIGRATION_ONLY", str(new_db_only).lower())
         write_env_key("SQL_CONVERSION_ONLY", str(new_sql_only).lower())
         write_env_key("SQL_TUNING_ONLY", str(new_tuning_only).lower())
+        write_env_key("SQL_FORMATTING_ONLY", str(new_formatting_only).lower())
         st.toast("Agent 선택 설정을 저장했습니다. 실행 중인 Agent에는 재시작 후 적용됩니다.")
         st.rerun()
 
-    if not any((new_db_only, new_sql_only, new_tuning_only)):
-        st.caption("전체 실행: 세 Agent 모두 실행됩니다.")
+    if not any((new_db_only, new_sql_only, new_tuning_only, new_formatting_only)):
+        st.caption("전체 실행: 네 Agent 모두 실행됩니다.")
     else:
         selected_agents = []
         if new_db_only:
@@ -84,6 +87,8 @@ with st.sidebar:
             selected_agents.append("SQL")
         if new_tuning_only:
             selected_agents.append("Tuning")
+        if new_formatting_only:
+            selected_agents.append("Formatting")
         st.caption("선택 실행: " + ", ".join(selected_agents))
 
     # ── Agent 컨트롤 패널 ────────────────────────────────────────────────
