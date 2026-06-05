@@ -108,16 +108,43 @@ def has_complex_mapping_rules(target_table: str | None) -> bool:
         return int(cursor.fetchone()[0] or 0) > 0
 
 
+def get_complex_target_tables(target_tables: set[str]) -> set[str]:
+    """Return target tables that have active NEXT_SQL_COMPLEX_MAP rules."""
+    _ensure_complex_map_table_exists()
+    normalized_targets = {
+        normalized
+        for target in target_tables
+        if (normalized := _normalize_table_name(target))
+    }
+    if not normalized_targets:
+        return set()
+
+    return {
+        target
+        for target in normalized_targets
+        if has_complex_mapping_rules(target)
+    }
+
+
 def get_complex_mapping_rules_for_job(
     job: SqlInfoJob,
+    target_tables: set[str] | None = None,
     top_k: int | None = None,
 ) -> tuple[list[ComplexMappingRuleItem], list[ComplexMappingRuleItem]]:
-    target = _normalize_table_name(job.target_table)
-    if not target:
+    targets = {
+        normalized
+        for target in (target_tables or {job.target_table or ""})
+        if (normalized := _normalize_table_name(target))
+    }
+    if not targets:
         return [], []
 
-    general_rules = _fetch_complex_rules(target_table=target, map_kind="GENERAL")
-    search_candidates = _fetch_complex_rules(target_table=target, map_kind="SEARCH")
+    general_rules: list[ComplexMappingRuleItem] = []
+    search_candidates: list[ComplexMappingRuleItem] = []
+    for target in sorted(targets):
+        general_rules.extend(_fetch_complex_rules(target_table=target, map_kind="GENERAL"))
+        search_candidates.extend(_fetch_complex_rules(target_table=target, map_kind="SEARCH"))
+
     search_rules = _select_search_rules(
         query_sql=job.source_sql,
         candidates=search_candidates,
@@ -125,7 +152,7 @@ def get_complex_mapping_rules_for_job(
     )
     logger.info(
         "[ComplexMapperRepository] complex rules loaded "
-        f"(target_table={target}, general={len(general_rules)}, "
+        f"(target_tables={','.join(sorted(targets))}, general={len(general_rules)}, "
         f"search_candidates={len(search_candidates)}, search_selected={len(search_rules)})"
     )
     return general_rules, search_rules

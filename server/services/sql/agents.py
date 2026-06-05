@@ -8,7 +8,12 @@ import time
 from server.config import settings
 from server.core.exceptions import LLMRateLimitError
 from server.core.logger import logger
-from server.repositories.sql.mapper_repository import get_all_mapping_rules, get_sql_map_type, get_unready_target_tables
+from server.repositories.sql.mapper_repository import (
+    get_all_mapping_rules,
+    get_sql_map_type,
+    get_unready_simple_target_tables,
+    get_unready_target_tables,
+)
 from server.repositories.sql.result_repository import (
     classify_sql_length,
     reset_tuning_state,
@@ -527,7 +532,9 @@ class TobeMultiAgentCoordinator:
             job.tuned_test = None
 
         unready_target_tables = []
-        if (map_type or "").strip().upper() != "COMPLEX":
+        if (map_type or "").strip().upper() == "COMPLEX":
+            unready_target_tables = get_unready_simple_target_tables(job.target_table)
+        else:
             unready_target_tables = get_unready_target_tables(job.target_table)
         if unready_target_tables:
             reason = "TARGET_MAPPING_NOT_READY: " + ",".join(unready_target_tables)

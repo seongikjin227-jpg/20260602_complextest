@@ -90,8 +90,11 @@ SQL conversion 단계에서 `NEXT_SQL_INFO.TARGET_TABLE`과 일치하는 활성 
 - complex 판정: `NEXT_SQL_COMPLEX_MAP.USE_YN='Y' AND FR_TABLE=TARGET_TABLE`
 - complex table이 없으면 simple fallback하지 않고 명시적으로 오류를 냅니다.
 - complex flow에서는 `server/config/prompts/tobe_sql_complex_prompt.json` 사용
-- simple flow는 기존처럼 `NEXT_MIG_INFO` / `NEXT_MIG_INFO_DTL`의 `FROM_TABLE / FROM_COLUMN / TO_TABLE / TO_COLUMN` 반복 구조를 사용
-- complex flow는 `NEXT_SQL_COMPLEX_MAP`의 `GENERAL` rule 전체와 `SEARCH` rule top-k를 `mapping_schema_text`에 전달
+- target table 목록 중 complex table에 있는 것은 `NEXT_SQL_COMPLEX_MAP`에서 가져옵니다.
+- target table 목록 중 complex table에 없는 것은 기존처럼 `NEXT_MIG_INFO` / `NEXT_MIG_INFO_DTL`에서 가져옵니다.
+- complex flow의 `mapping_schema_text`는 `[SIMPLE_MAPPING_RULES]`, `[COMPLEX_GENERAL_RULES]`, `[COMPLEX_SEARCH_RULES_TOP_K]`를 함께 전달합니다.
+- simple flow는 기존처럼 `NEXT_MIG_INFO` / `NEXT_MIG_INFO_DTL`의 `FROM_TABLE / FROM_COLUMN / TO_TABLE / TO_COLUMN` 반복 구조만 사용합니다.
+- complex flow는 `NEXT_SQL_COMPLEX_MAP`의 `GENERAL` rule 전체와 `SEARCH` rule top-k를 `mapping_schema_text`에 전달합니다.
 - `SEARCH` rule은 `EDIT_FR_SQL`이 있으면 해당 SQL, 없으면 `FR_SQL_TEXT`를 query로 사용하고 `FR_COL`만 embedding 대상으로 검색
 - `COMPLEX_MAP_SEARCH_TOP_K`로 SEARCH rule 검색 건수를 조정합니다.
 - complex prompt에는 `DESCRIPTION` CLOB을 포함해 column/조건/depth/parent 관계 설명을 전달

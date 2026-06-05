@@ -109,7 +109,25 @@ def get_unready_target_tables(target_table_value: str | None) -> list[str]:
     target_tables = _parse_target_tables(target_table_value)
     if not target_tables:
         return []
+    return _get_unready_target_tables(target_tables)
 
+
+def get_unready_simple_target_tables(target_table_value: str | None) -> list[str]:
+    target_tables = _parse_target_tables(target_table_value)
+    if not target_tables:
+        return []
+
+    complex_target_tables = {
+        target_table
+        for target_table in target_tables
+        if has_complex_mapping_rules(target_table)
+    }
+    return _get_unready_target_tables(target_tables - complex_target_tables)
+
+
+def _get_unready_target_tables(target_tables: set[str]) -> list[str]:
+    if not target_tables:
+        return []
     map_table = get_mapping_rule_table()
     query = f"""
         SELECT M.FR_TABLE, M.STATUS

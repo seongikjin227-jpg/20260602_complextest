@@ -703,8 +703,12 @@ get_sql_map_type(target_table)
 
 ```text
 get_unready_target_tables(target_table)
-  -> MAP_TYPE == COMPLEX이면 이 check를 수행하지 않음
-     complex mapping readiness는 NEXT_SQL_COMPLEX_MAP 존재/룰 조회로 판단
+  -> MAP_TYPE == COMPLEX이면:
+       target table 목록을 다시 분리
+       NEXT_SQL_COMPLEX_MAP에 있는 target table:
+         complex mapping readiness는 NEXT_SQL_COMPLEX_MAP 존재/룰 조회로 판단
+       NEXT_SQL_COMPLEX_MAP에 없는 target table:
+         기존 NEXT_MIG_INFO readiness check 수행
   -> MAP_TYPE != COMPLEX이면:
   -> target table token 파싱
   -> NEXT_MIG_INFO TARGET_YN='Y' mapping 조회
@@ -770,25 +774,33 @@ generate_tobe_sql(job, mapping_rules, last_error)
   -> job.map_type 확인
   -> job.map_type == "COMPLEX":
        template = tobe_sql_complex_prompt.json
-       get_complex_mapping_rules_for_job(job)
+       target_tables = TARGET_TABLE token 목록
+       complex_target_tables =
+          NEXT_SQL_COMPLEX_MAP에 USE_YN='Y' AND FR_TABLE=target_table인 table 목록
+       simple_target_tables =
+          target_tables - complex_target_tables
+       simple_rules =
+          NEXT_MIG_INFO / NEXT_MIG_INFO_DTL 중 simple_target_tables에 해당하는 기존 mapping
+       get_complex_mapping_rules_for_job(job, complex_target_tables)
           -> GENERAL:
                NEXT_SQL_COMPLEX_MAP
                WHERE USE_YN='Y'
                  AND MAP_KIND='GENERAL'
-                 AND FR_TABLE=TARGET_TABLE
+                 AND FR_TABLE IN complex_target_tables
                전체 조회
           -> SEARCH:
                NEXT_SQL_COMPLEX_MAP
                WHERE USE_YN='Y'
                  AND MAP_KIND='SEARCH'
-                 AND FR_TABLE=TARGET_TABLE
+                 AND FR_TABLE IN complex_target_tables
                전체 후보 조회
                query SQL = EDIT_FR_SQL if present else FR_SQL_TEXT
                embedding target = FR_COL only
                top-k = COMPLEX_MAP_SEARCH_TOP_K, default 3
        mapping_schema_text =
-          [GENERAL_RULES]
-          [SEARCH_RULES_TOP_K]
+          [SIMPLE_MAPPING_RULES]
+          [COMPLEX_GENERAL_RULES]
+          [COMPLEX_SEARCH_RULES_TOP_K]
        correct_sql_hint_json = "[]"
   -> job.map_type != "COMPLEX":
        template = tobe_sql_prompt.json
@@ -814,8 +826,9 @@ NEXT_SQL_COMPLEX_MAP:
   TO_TABLE = TO-BE table명
   TO_COL = 단일 TO-BE column 또는 TO-BE SQL pattern
   DESCRIPTION = 의미 변환, 조건, depth, parent 관계 설명
-  GENERAL rule = 전부 prompt에 포함
-  SEARCH rule = FR_COL 기준 vector search top-k만 prompt에 포함
+  SIMPLE_MAPPING_RULES = complex table에 없는 target table의 기존 NEXT_MIG_INFO mapping
+  COMPLEX_GENERAL_RULES = complex table에 있는 target table의 GENERAL rule 전부
+  COMPLEX_SEARCH_RULES_TOP_K = complex table에 있는 target table의 SEARCH rule 중 FR_COL 기준 vector search top-k
   correct SQL hint는 제외
 ```
 

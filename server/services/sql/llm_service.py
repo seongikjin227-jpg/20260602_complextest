@@ -14,7 +14,7 @@ from langchain_openai import ChatOpenAI
 from server.core.exceptions import LLMRateLimitError
 from server.core.llm_fallback import get_active_model, is_model_fallback_error, model_candidates, set_active_model
 from server.core.logger import logger
-from server.repositories.sql.complex_mapper_repository import get_complex_mapping_rules_for_job
+from server.repositories.sql.complex_mapper_repository import get_complex_mapping_rules_for_job, get_complex_target_tables
 from server.repositories.sql.log_repository import insert_sql_log
 from server.services.sql.domain_models import ComplexMappingRuleItem, MappingRuleItem, SqlInfoJob
 from server.services.sql.prompt_service import build_prompt_messages
@@ -71,9 +71,9 @@ def _resolve_llm_provider(provider: str | None, base_url: str, model: str) -> st
     return "openai"
 
 
-def _serialize_mapping_rules(mapping_rules: list[MappingRuleItem]) -> str:
+def _serialize_mapping_rules(mapping_rules: list[MappingRuleItem], section_name: str = "MAPPING_RULES") -> str:
     if not mapping_rules:
-        return "[MAPPING_RULES]\n- (empty)"
+        return f"[{section_name}]\n- (empty)"
 
     rows: set[tuple[str, str, str, str]] = set()
     source_schema = _schema_env("ORACLE_SCHEMA_SRC")
@@ -86,7 +86,7 @@ def _serialize_mapping_rules(mapping_rules: list[MappingRuleItem]) -> str:
         if fr_table and to_table and fr_col and to_col:
             rows.add((fr_table, fr_col, to_table, to_col))
 
-    lines = ["[MAPPING_RULES]"]
+    lines = [f"[{section_name}]"]
     if not rows:
         lines.append("- (empty)")
         return "\n".join(lines)
@@ -100,18 +100,20 @@ def _serialize_mapping_rules(mapping_rules: list[MappingRuleItem]) -> str:
 
 
 def _serialize_next_sql_complex_mapping_rules(
+    simple_rules: list[MappingRuleItem],
     general_rules: list[ComplexMappingRuleItem],
     search_rules: list[ComplexMappingRuleItem],
 ) -> str:
     target_schema = _schema_env("ORACLE_SCHEMA_TGT")
-    sections = ["[GENERAL_RULES]"]
+    sections = [_serialize_mapping_rules(simple_rules, section_name="SIMPLE_MAPPING_RULES"), ""]
+    sections.append("[COMPLEX_GENERAL_RULES]")
     if not general_rules:
         sections.append("- (empty)")
     for rule in general_rules:
         sections.extend(_format_complex_map_rule(rule, target_schema=target_schema, include_score=False))
 
     sections.append("")
-    sections.append("[SEARCH_RULES_TOP_K]")
+    sections.append("[COMPLEX_SEARCH_RULES_TOP_K]")
     if not search_rules:
         sections.append("- (empty)")
     for rank, rule in enumerate(search_rules, start=1):
@@ -236,6 +238,19 @@ def _select_mapping_rules_for_job(job: SqlInfoJob, mapping_rules: list[MappingRu
     for fr_table in sorted(selected_fr_tables):
         filtered.extend(rules_by_fr.get(fr_table, []))
     return filtered
+
+
+def _select_mapping_rules_for_target_tables(
+    mapping_rules: list[MappingRuleItem],
+    target_tables: set[str],
+) -> list[MappingRuleItem]:
+    if not mapping_rules or not target_tables:
+        return []
+    return [
+        rule
+        for rule in mapping_rules
+        if _fr_table_contains_any_target(rule.fr_table, target_tables)
+    ]
 
 
 def _fr_table_contains_any_target(fr_table: str, target_tables: set[str]) -> bool:
@@ -711,8 +726,19 @@ def generate_tobe_sql(
     template_name = "tobe_sql_complex_prompt.json" if is_complex else "tobe_sql_prompt.json"
 
     if is_complex:
-        general_rules, search_rules = get_complex_mapping_rules_for_job(job)
+        target_tables = _load_target_tables(job)
+        complex_target_tables = get_complex_target_tables(target_tables)
+        simple_target_tables = target_tables - complex_target_tables
+        simple_rules = _select_mapping_rules_for_target_tables(
+            mapping_rules=mapping_rules,
+            target_tables=simple_target_tables,
+        )
+        general_rules, search_rules = get_complex_mapping_rules_for_job(
+            job,
+            target_tables=complex_target_tables,
+        )
         mapping_schema_text = _serialize_next_sql_complex_mapping_rules(
+            simple_rules=simple_rules,
             general_rules=general_rules,
             search_rules=search_rules,
         )
