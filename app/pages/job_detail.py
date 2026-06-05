@@ -1,7 +1,7 @@
 import pandas as pd
 import streamlit as st
 
-from utils.db import get_mig_dtl, get_mig_jobs, get_mig_logs, get_sql_job_full
+from utils.db import get_mig_dtl, get_mig_jobs, get_mig_logs, get_sql_job_full, get_sql_jobs
 
 
 _SQL_DETAIL_OPTIONS = {
@@ -94,13 +94,74 @@ def _render_mig_job_detail():
 
 
 def _render_sql_job_detail():
-    row_id_input = st.text_input("ROW_ID 입력 (ROWIDTOCHAR)", placeholder="예: AAABBBCCCDDDEEEF")
-
-    if not row_id_input:
-        st.info("ROW_ID를 입력하면 SQL Job 상세를 조회합니다.")
+    try:
+        jobs = get_sql_jobs()
+    except Exception as e:
+        st.error(f"DB 연결 실패: {e}")
         return
 
-    job = get_sql_job_full(row_id_input.strip())
+    if not jobs:
+        st.info("SQL Job 데이터 없음")
+        return
+
+    df = pd.DataFrame(jobs)
+    for col in ("STATUS", "TUNED_TEST", "SQL_ID", "SPACE_NM"):
+        if col not in df.columns:
+            df[col] = ""
+        df[col] = df[col].fillna("").astype(str)
+
+    filter_cols = st.columns([1.2, 1.2, 2, 2])
+    with filter_cols[0]:
+        status_options = ["전체"] + sorted([v for v in df["STATUS"].unique().tolist() if v])
+        sel_status = st.selectbox("STATUS", status_options, key="sql_job_detail_status")
+    with filter_cols[1]:
+        tuned_status_options = ["전체"] + sorted([v for v in df["TUNED_TEST"].unique().tolist() if v])
+        sel_tuned_status = st.selectbox("TUNED_TEST", tuned_status_options, key="sql_job_detail_tuned_status")
+    with filter_cols[2]:
+        sql_id_query = st.text_input("SQL_ID 검색", placeholder="예: selectUser", key="sql_job_detail_sql_id")
+    with filter_cols[3]:
+        namespace_query = st.text_input("Namespace 검색", placeholder="예: userMapper", key="sql_job_detail_namespace")
+
+    filtered = df.copy()
+    if sel_status != "전체":
+        filtered = filtered[filtered["STATUS"] == sel_status]
+    if sel_tuned_status != "전체":
+        filtered = filtered[filtered["TUNED_TEST"] == sel_tuned_status]
+    if sql_id_query.strip():
+        filtered = filtered[filtered["SQL_ID"].str.contains(sql_id_query.strip(), case=False, na=False)]
+    if namespace_query.strip():
+        filtered = filtered[filtered["SPACE_NM"].str.contains(namespace_query.strip(), case=False, na=False)]
+
+    st.caption(f"검색 결과 {len(filtered)}건 / 전체 {len(df)}건")
+
+    row_id_input = ""
+    with st.expander("ROW_ID로 직접 조회"):
+        row_id_input = st.text_input("ROW_ID 입력 (ROWIDTOCHAR)", placeholder="예: AAABBBCCCDDDEEEF")
+
+    selected_row_id = row_id_input.strip()
+    if not selected_row_id:
+        if filtered.empty:
+            st.warning("조건에 맞는 SQL Job이 없습니다.")
+            return
+        filtered_records = filtered.to_dict("records")
+        labels = [
+            (
+                f"{r.get('SPACE_NM') or '-'}.{r.get('SQL_ID') or '-'} "
+                f"| STATUS={r.get('STATUS') or 'NULL'} "
+                f"| TUNED_TEST={r.get('TUNED_TEST') or 'NULL'} "
+                f"| UPD_TS={r.get('UPD_TS') or '-'}"
+            )
+            for r in filtered_records
+        ]
+        selected_idx = st.selectbox(
+            "SQL Job 선택",
+            range(len(labels)),
+            format_func=lambda i: labels[i],
+            key="sql_job_detail_selected_idx",
+        )
+        selected_row_id = str(filtered_records[selected_idx]["ROW_ID"])
+
+    job = get_sql_job_full(selected_row_id)
     if not job:
         st.warning("해당 ROW_ID의 데이터를 찾을 수 없습니다.")
         return

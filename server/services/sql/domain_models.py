@@ -50,3 +50,18 @@ class MappingRuleItem:
     to_table: str
     to_col: str
     description: str = ""
+
+
+@dataclass
+class ComplexMappingRuleItem:
+    """NEXT_SQL_COMPLEX_MAP row used by the complex SQL conversion flow."""
+
+    map_id: int
+    map_kind: str
+    fr_table: str
+    fr_col: str
+    to_table: str
+    to_col: str
+    description: str = ""
+    search_score: Optional[float] = None
+    search_method: Optional[str] = None

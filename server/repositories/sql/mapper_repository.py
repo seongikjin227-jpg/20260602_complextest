@@ -9,6 +9,7 @@ from server.services.sql.db_runtime import (
     get_mapping_rule_table,
 )
 from server.services.sql.domain_models import MappingRuleItem
+from server.repositories.sql.complex_mapper_repository import has_complex_mapping_rules
 
 
 def _to_text(value, default: str = "") -> str:
@@ -55,10 +56,6 @@ def _map_table_columns() -> set[str]:
         return {_to_text(row[0]).upper() for row in cursor.fetchall()}
 
 
-def _is_complex_map_type(map_type: str | None) -> bool:
-    return "COMPLEX" in _to_text(map_type).strip().upper()
-
-
 def get_all_mapping_rules() -> list[MappingRuleItem]:
     """NEXT_MIG_INFO + DTL 조인으로 전체 매핑 룰을 읽어온다."""
     map_table = get_mapping_rule_table()
@@ -98,31 +95,12 @@ def get_all_mapping_rules() -> list[MappingRuleItem]:
 
 
 def get_sql_map_type(target_table_value: str | None) -> str | None:
-    """Return COMPLEX if any matched mapping is complex, SIMPLE if all are simple."""
+    """Return COMPLEX when NEXT_SQL_COMPLEX_MAP has rules, otherwise SIMPLE."""
     target_tables = _parse_target_tables(target_table_value)
     if not target_tables:
         return None
 
-    map_table = get_mapping_rule_table()
-    query = f"""
-        SELECT M.FR_TABLE, M.MAP_TYPE
-        FROM {map_table} M
-        WHERE UPPER(TRIM(M.TARGET_YN)) = 'Y'
-    """
-
-    matched_map_types: list[str] = []
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(query)
-        for fr_table, map_type in cursor.fetchall():
-            fr_table_text = _to_text(fr_table).upper()
-            normalized_map_type = _to_text(map_type).strip().upper()
-            if any(_fr_table_contains_target(fr_table_text, target_table) for target_table in target_tables):
-                matched_map_types.append(normalized_map_type)
-
-    if not matched_map_types:
-        return None
-    if any(_is_complex_map_type(map_type) for map_type in matched_map_types):
+    if any(has_complex_mapping_rules(target_table) for target_table in target_tables):
         return "COMPLEX"
     return "SIMPLE"
 

@@ -14,8 +14,9 @@ from langchain_openai import ChatOpenAI
 from server.core.exceptions import LLMRateLimitError
 from server.core.llm_fallback import get_active_model, is_model_fallback_error, model_candidates, set_active_model
 from server.core.logger import logger
+from server.repositories.sql.complex_mapper_repository import get_complex_mapping_rules_for_job
 from server.repositories.sql.log_repository import insert_sql_log
-from server.services.sql.domain_models import MappingRuleItem, SqlInfoJob
+from server.services.sql.domain_models import ComplexMappingRuleItem, MappingRuleItem, SqlInfoJob
 from server.services.sql.prompt_service import build_prompt_messages
 from server.services.sql.correct_sql_rag_service import correct_sql_hint_rag_service
 from server.services.sql.tobe_sql_tuning_service import tobe_sql_tuning_service
@@ -98,53 +99,59 @@ def _serialize_mapping_rules(mapping_rules: list[MappingRuleItem]) -> str:
     return "\n".join(lines)
 
 
-def _is_complex_map_type(map_type: str | None) -> bool:
-    return "COMPLEX" in (map_type or "").strip().upper()
-
-
-def _serialize_complex_mapping_rules(mapping_rules: list[MappingRuleItem]) -> str:
-    simple_rules = [rule for rule in mapping_rules if not _is_complex_map_type(rule.map_type)]
-    complex_rules = [rule for rule in mapping_rules if _is_complex_map_type(rule.map_type)]
-    sections: list[str] = []
-    if simple_rules:
-        sections.append(_serialize_mapping_rules(simple_rules))
-    sections.append(_serialize_complex_only_mapping_rules(complex_rules))
-    return "\n\n".join(sections)
-
-
-def _serialize_complex_only_mapping_rules(mapping_rules: list[MappingRuleItem]) -> str:
-    if not mapping_rules:
-        return "[COMPLEX_MAPPING_RULES]\n- (empty)"
-
+def _serialize_next_sql_complex_mapping_rules(
+    general_rules: list[ComplexMappingRuleItem],
+    search_rules: list[ComplexMappingRuleItem],
+) -> str:
     target_schema = _schema_env("ORACLE_SCHEMA_TGT")
-    grouped: dict[tuple[str, str, str, str], dict[str, set[str]]] = {}
-    for rule in mapping_rules:
-        key = (
-            (rule.map_type or "").strip().upper(),
-            (rule.fr_table or "").strip(),
-            _qualify_mapping_table(rule.to_table, target_schema),
-            (rule.description or "").strip(),
-        )
-        bucket = grouped.setdefault(key, {"from_columns": set(), "to_columns": set()})
-        if (rule.fr_col or "").strip():
-            bucket["from_columns"].add((rule.fr_col or "").strip())
-        if (rule.to_col or "").strip():
-            bucket["to_columns"].add((rule.to_col or "").strip())
+    sections = ["[GENERAL_RULES]"]
+    if not general_rules:
+        sections.append("- (empty)")
+    for rule in general_rules:
+        sections.extend(_format_complex_map_rule(rule, target_schema=target_schema, include_score=False))
 
-    lines = ["[COMPLEX_MAPPING_RULES]"]
-    for idx, ((map_type, from_table_dml, to_table, description), columns) in enumerate(sorted(grouped.items()), start=1):
-        lines.append(f"\n## COMPLEX_RULE_{idx}")
-        lines.append(f"MAP_TYPE={map_type or 'COMPLEX'}")
-        lines.append("FROM_TABLE_DML:")
-        lines.append("```sql")
-        lines.append(from_table_dml or "(empty)")
-        lines.append("```")
-        lines.append(f"TO_TABLE={to_table or '(empty)'}")
-        lines.append("TO_COLUMNS=" + ", ".join(sorted(columns["to_columns"])))
-        lines.append("FROM_COLUMNS_SEARCH_KEYS=" + ", ".join(sorted(columns["from_columns"])))
-        lines.append("DESCRIPTION:")
-        lines.append(description or "(empty)")
-    return "\n".join(lines)
+    sections.append("")
+    sections.append("[SEARCH_RULES_TOP_K]")
+    if not search_rules:
+        sections.append("- (empty)")
+    for rank, rule in enumerate(search_rules, start=1):
+        sections.extend(
+            _format_complex_map_rule(
+                rule,
+                target_schema=target_schema,
+                include_score=True,
+                rank=rank,
+            )
+        )
+    return "\n".join(sections)
+
+
+def _format_complex_map_rule(
+    rule: ComplexMappingRuleItem,
+    target_schema: str,
+    include_score: bool,
+    rank: int | None = None,
+) -> list[str]:
+    label = f"SEARCH_RULE_{rank}" if rank is not None else f"MAP_ID_{rule.map_id}"
+    lines = [f"\n## {label}"]
+    lines.append(f"MAP_ID={rule.map_id}")
+    lines.append(f"MAP_KIND={(rule.map_kind or '').strip().upper()}")
+    if include_score:
+        lines.append(f"SEARCH_SCORE={rule.search_score if rule.search_score is not None else ''}")
+        lines.append(f"SEARCH_METHOD={rule.search_method or ''}")
+    lines.append(f"FR_TABLE={(rule.fr_table or '').strip()}")
+    lines.append("FR_COL_OR_PATTERN:")
+    lines.append("```sql")
+    lines.append((rule.fr_col or "").strip() or "(empty)")
+    lines.append("```")
+    lines.append(f"TO_TABLE={_qualify_mapping_table(rule.to_table, target_schema)}")
+    lines.append("TO_COL_OR_PATTERN:")
+    lines.append("```sql")
+    lines.append((rule.to_col or "").strip() or "(empty)")
+    lines.append("```")
+    lines.append("DESCRIPTION:")
+    lines.append((rule.description or "").strip() or "(empty)")
+    return lines
 
 
 def _qualify_mapping_table(table_name: str, schema: str) -> str:
@@ -700,14 +707,19 @@ def generate_tobe_sql(
     mapping_rules: list[MappingRuleItem],
     last_error: str | None = None,
 ) -> str:
-    scoped_rules = _select_mapping_rules_for_job(job=job, mapping_rules=mapping_rules)
-    is_complex = any(_is_complex_map_type(rule.map_type) for rule in scoped_rules)
+    is_complex = (job.map_type or "").strip().upper() == "COMPLEX"
     template_name = "tobe_sql_complex_prompt.json" if is_complex else "tobe_sql_prompt.json"
-    mapping_schema_text = (
-        _serialize_complex_mapping_rules(scoped_rules)
-        if is_complex
-        else _serialize_mapping_rules(scoped_rules)
-    )
+
+    if is_complex:
+        general_rules, search_rules = get_complex_mapping_rules_for_job(job)
+        mapping_schema_text = _serialize_next_sql_complex_mapping_rules(
+            general_rules=general_rules,
+            search_rules=search_rules,
+        )
+    else:
+        scoped_rules = _select_mapping_rules_for_job(job=job, mapping_rules=mapping_rules)
+        mapping_schema_text = _serialize_mapping_rules(scoped_rules)
+
     correct_sql_hint_json = "[]"
     if not is_complex:
         correct_sql_hints = correct_sql_hint_rag_service.retrieve_correct_sql_hints(
