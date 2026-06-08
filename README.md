@@ -1,4 +1,5 @@
-# 20260601 Migration Pipeline
+# Migration Agent Pipeline
+# version = 2026-06-08
 
 Oracle/MyBatis 기반 DB migration, SQL conversion, SQL tuning, SQL formatting을 자동화하는 Streamlit 운영 콘솔과 Python batch agent입니다.
 
@@ -61,7 +62,8 @@ NEXT_SQL_INFO polling
 
 Conversion polling 대상:
 
-- 포함: `URGENT`, `READY`, `FAIL`, `PENDING`, `SKIP`, `NULL`
+- 포함: `URGENT`, `READY`, `FAIL`, `PENDING`, `NULL`
+- 제외: `SKIP`, `NA`, 이미 완료된 `PASS`
 - 제외: `NA`
 - 이미 `STATUS='PASS'`이고 `TO_SQL_TEXT`가 있는 row는 conversion 대상에서 제외
 
@@ -69,7 +71,7 @@ Conversion 성공 시:
 
 - `STATUS='PASS'`
 - `TUNED_TEST='READY'`
-- SELECT가 아닌 SQL도 conversion validation 이후 tuning queue로 넘깁니다. 단, tuning validation은 non-SELECT에서 `SKIP` 처리됩니다.
+- SELECT가 아닌 SQL도 conversion validation 이후 tuning queue로 넘깁니다. 단, tuning validation은 수행하지 않고 `TUNED_TEST='PASS_NON_SELECT'`로 처리합니다.
 
 ## Correct SQL stage bypass
 
@@ -133,13 +135,13 @@ INSERT/UPDATE/DELETE:
 TO-BE SQL
   -> tuning rule RAG 조회
   -> TUNED_SQL / TUNED_RESULT 생성
-  -> tuned test는 SKIP
+  -> tuned test는 PASS_NON_SELECT
   -> FORMATTED_SQL 생성
 ```
 
-튜닝 agent 내부에서는 기존처럼 각 job이 `TUNED_TEST='PASS'` 또는 `TUNED_TEST='SKIP'`이 되면 바로 `FORMATTED_SQL`까지 생성합니다.
+튜닝 agent 내부에서는 기존처럼 각 job이 `TUNED_TEST='PASS'` 또는 `TUNED_TEST='PASS_NON_SELECT'`가 되면 바로 `FORMATTED_SQL`까지 생성합니다.
 
-별도 SQL Formatting agent는 보정용입니다. `TUNED_TEST IN ('PASS', 'SKIP')`이지만 `FORMATTED_SQL IS NULL`인 row만 다시 포맷팅합니다.
+별도 SQL Formatting agent는 보정용입니다. `TUNED_TEST IN ('PASS', 'PASS_NON_SELECT')`이지만 `FORMATTED_SQL`이 `NULL`, empty CLOB, 공백 문자열인 row만 다시 포맷팅합니다. `SKIP`은 사용자가 의도적으로 제외한 건으로 보고 Formatting Only 대상에서도 제외합니다.
 
 튜닝 결과 컬럼:
 
@@ -184,13 +186,22 @@ streamlit run app/app.py
 - System Health: DB/LLM/runtime 상태 확인
 - Settings: LLM 설정과 fallback model 목록 관리
 
+Sidebar behavior:
+
+- MENU: screen selector for dashboard, monitors, job detail, settings, and XML export.
+- Agent selection: toggles DB Migration, SQL Conversion, SQL Tuning, and SQL Formatting execution modes.
+- Agent control: start, pause, resume, and stop controls.
+- Log: reads runtime/agent.log. The backend logger writes to this file after the agent process restarts.
+
 Dashboard 표시 기준:
 
 - `URGENT`, `READY`는 진행 중(`RUNNING`)으로 합산 표시
 - `NA`는 Dashboard status 카드와 총계에서 표시하지 않음
 - SQL 진척률은 `PASS / 전체 대상`
 - 성공률은 `PASS / 성공·실패 판정 대상`
-- Tuning은 `SKIP`을 성공률 분모에서 제외
+- Tuning은 `PASS_NON_SELECT`를 성공 계열로 표시하고, 화면에서는 `PASS (non-select)`로 보여줍니다.
+- `SKIP`은 사용자가 의도적으로 제외한 케이스로 두며 자동 non-SELECT 검증 생략에는 사용하지 않습니다.
+- Formatting Guide 적용률은 `TUNED_TEST IN ('PASS', 'PASS_NON_SELECT')` 중 `FORMATTED_SQL`이 채워진 건수로 계산합니다.
 
 Chatbot UI는 질문을 입력하면 사용자 메시지가 먼저 채팅 기록에 남고, 같은 기록 영역에 assistant의 `입력중...` 메시지가 표시된 뒤 LLM 응답으로 교체됩니다.
 
@@ -359,4 +370,4 @@ python -m json.tool server/config/prompts/sql_indent_format_prompt.json
 - `NEXT_SQL_INFO.LOG`는 row의 최신 요약이고, 상세 이력은 `NEXT_SQL_LOG`에 append-only로 저장됩니다.
 - `FORMATTED_SQL`은 XML export의 기준 SQL입니다.
 - `NA`는 conversion/test 대상에서 제외할 때 사용합니다.
-- `SKIP`은 재시도 가능한 보류 또는 의도적 검증 생략 상태로 사용합니다.
+- `SKIP`은 사용자가 의도적으로 제외한 상태로 사용합니다. 자동 non-SELECT 튜닝 검증 생략은 `PASS_NON_SELECT`를 사용합니다.

@@ -228,7 +228,7 @@ tool 호출
 metrics 분류:
 
 ```text
-status in ("SUCCESS", "PASS") -> success_count
+status in ("SUCCESS", "PASS", "PASS_NON_SELECT") -> success_count
 status in ("SKIP", "NA")      -> skip_count
 그 외                         -> fail_count
 ```
@@ -335,7 +335,7 @@ server/repositories/sql/result_repository.py
 get_pending_jobs()
   -> RESULT_TABLE 기본값 NEXT_SQL_INFO
   -> STATUS 조건:
-       UPPER(TRIM(STATUS)) IN ('URGENT', 'FAIL', 'READY', 'PENDING', 'SKIP')
+       UPPER(TRIM(STATUS)) IN ('URGENT', 'FAIL', 'READY', 'PENDING')
        OR STATUS IS NULL
   -> TO_SQL_TEXT 조건:
        TO_SQL_TEXT IS NULL OR UPPER(TRIM(STATUS)) <> 'PASS'
@@ -346,7 +346,6 @@ get_pending_jobs()
        URGENT
        READY
        FAIL
-       SKIP
        PENDING
        NULL
        UPD_TS NULLS FIRST
@@ -407,8 +406,8 @@ get_tuning_jobs()
 ```text
 get_formatting_jobs()
   -> FORMATTED_SQL 또는 TUNED_TEST 컬럼 없으면 []
-  -> WHERE UPPER(TRIM(TUNED_TEST)) IN ('PASS', 'SKIP')
-     AND FORMATTED_SQL IS NULL
+  -> WHERE UPPER(TRIM(TUNED_TEST)) IN ('PASS', 'PASS_NON_SELECT')
+     AND (FORMATTED_SQL IS NULL OR FORMATTED_SQL is empty CLOB/blank)
      AND NVL(BATCH_CNT, 0) < JOB_MAX_BATCH_COUNT
   -> ORDER BY:
        UPD_TS NULLS FIRST
@@ -418,7 +417,7 @@ get_formatting_jobs()
 
 이 queue는 보정용입니다.
 
-이미 tuning agent 내부에서 `PASS` 또는 `SKIP` 후 `FORMATTED_SQL`이 정상 생성되면 formatting queue에 올라오지 않습니다.
+When tuning agent creates FORMATTED_SQL after PASS or PASS_NON_SELECT, the row does not enter the formatting queue.
 
 ## 6. DB Migration Agent 상세 흐름
 
@@ -1324,7 +1323,7 @@ SqlTuningAgent.run(state)
   -> for tuning_attempt in 1..max_tuning_attempts:
        _apply_tuning_rules(state)
        if tag_kind != SELECT:
-          state.tuned_test = "SKIP"
+          state.tuned_test = "PASS_NON_SELECT"
           break
        try:
           _run_tuned_sql_validation(state)
@@ -1340,7 +1339,7 @@ SqlTuningAgent.run(state)
           "TUNED_TEST_VALIDATION_FAIL: CASE_NO=...,BASELINE_COUNT=...,TUNED_COUNT=..."
   -> if TUNED_TEST == PASS:
        increment_rule_hit_counts_for_success()
-  -> if TUNED_TEST in (PASS, SKIP):
+  -> if TUNED_TEST in (PASS, PASS_NON_SELECT):
        generate_formatted_sql()
        state.formatted_sql = result
 ```
@@ -1462,12 +1461,12 @@ if state.tuned_test == PASS:
 
 - `RULE_TYPE='SEARCH'` rule만 대상
 - 중복 rule id는 한 번만 count
-- non-SELECT의 `TUNED_TEST='SKIP'`은 hit count 증가 없음
+- For non-SELECT SQL, TUNED_TEST='PASS_NON_SELECT' means tuned SQL was created and validation was intentionally not executed.
 
 ### 10.8 formatting in tuning
 
 ```text
-if state.tuned_test in ("PASS", "SKIP"):
+if state.tuned_test in ("PASS", "PASS_NON_SELECT"):
   state.formatted_sql = generate_formatted_sql(
     input_sql = state.tuned_sql or state.tobe_sql
   )
@@ -1492,8 +1491,8 @@ server/tools/sql_formatting.py
 대상:
 
 ```text
-TUNED_TEST IN ('PASS', 'SKIP')
-AND FORMATTED_SQL IS NULL
+TUNED_TEST IN ('PASS', 'PASS_NON_SELECT')
+     AND (FORMATTED_SQL IS NULL OR FORMATTED_SQL is empty CLOB/blank)
 ```
 
 흐름:
@@ -1706,7 +1705,7 @@ FORMATTED_SQL 컬럼 존재 확인
 | `READY` | conversion 일반 대기 |
 | `PENDING` | conversion 대기 |
 | `FAIL` | conversion 재시도 대상 |
-| `SKIP` | conversion 재시도 가능 보류 |
+| `SKIP` | Manual user exclusion. SQL conversion polling does not pick it up automatically. |
 | `PASS` | conversion 완료 |
 | `NA` | conversion/test 대상 제외 |
 | `NULL` | conversion 대기 |
@@ -1719,7 +1718,7 @@ FORMATTED_SQL 컬럼 존재 확인
 | `READY` | tuning 일반 대기 |
 | `FAIL` | tuning 재시도 대상 |
 | `PASS` | tuning validation 통과 |
-| `SKIP` | non-SELECT 등으로 tuning validation 의도적 생략 |
+| `PASS_NON_SELECT` | Non-SELECT tuning validation was not executed, but tuning and formatting are treated as successful. |
 | `NULL` | tuning 대상 아님 또는 아직 conversion 미완료 |
 | `NA` | tuning 제외 |
 
@@ -1802,7 +1801,7 @@ TUNED_TEST=READY, STATUS=PASS
   -> tuning rule 적용
   -> TAG_KIND != SELECT
   -> tuned validation skip
-  -> TUNED_TEST=SKIP
+  -> TUNED_TEST=PASS_NON_SELECT
   -> FORMATTED_SQL 생성
 ```
 
@@ -1837,8 +1836,8 @@ TUNED_TEST=READY
 ```text
 SQL_FORMATTING_ONLY=true
   -> Supervisor는 formatting job만 조회
-  -> TUNED_TEST IN (PASS, SKIP)
-     AND FORMATTED_SQL IS NULL
+  -> TUNED_TEST IN (PASS, PASS_NON_SELECT)
+     AND (FORMATTED_SQL IS NULL OR FORMATTED_SQL is empty CLOB/blank)
   -> source_sql = TUNED_SQL or TO_SQL_TEXT
   -> sql_indent_format_prompt.json 호출
   -> FORMATTED_SQL 저장
@@ -1865,6 +1864,32 @@ Chatbot:
   -> LLM 호출
   -> answer 저장
   -> rerun
+```
+
+### 16.1.1 Sidebar and runtime log
+
+```text
+app/app.py sidebar
+  -> MENU
+       Dashboard / monitor / detail / settings / XML export screen selector
+  -> Agent selection
+       DB_MIGRATION_ONLY
+       SQL_CONVERSION_ONLY
+       SQL_TUNING_ONLY
+       SQL_FORMATTING_ONLY
+       toggle values are written to .env
+  -> Agent control
+       start / pause / resume / stop
+  -> Log
+       shows tail of runtime/agent.log
+```
+
+```text
+server/core/logger.py
+  -> creates migration_agent logger
+  -> attaches stdout StreamHandler
+  -> attaches runtime/agent.log FileHandler
+  -> Streamlit sidebar log viewer reads the same file
 ```
 
 ### 16.2 Job Detail SQL 선택

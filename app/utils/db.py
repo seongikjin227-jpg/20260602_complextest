@@ -167,7 +167,7 @@ def get_formatting_summary() -> dict[str, int]:
                 END
             ) AS APPLIED
         FROM {SQL_TABLE}
-        WHERE UPPER(TRIM(TUNED_TEST)) IN ('PASS', 'SKIP')
+        WHERE UPPER(TRIM(TUNED_TEST)) IN ('PASS', 'PASS_NON_SELECT')
     """
     try:
         with get_connection() as conn:

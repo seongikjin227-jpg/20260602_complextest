@@ -19,7 +19,7 @@ def _status(value: str | None) -> str:
 
 
 def _is_pass(row: dict) -> bool:
-    return _status(row.get("TUNED_TEST")) == "PASS"
+    return _status(row.get("TUNED_TEST")) in {"PASS", "PASS_NON_SELECT"}
 
 
 def _has_formatted_sql(row: dict) -> bool:

@@ -2,6 +2,11 @@
 
 import logging
 import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parent.parent.parent
+_RUNTIME_DIR = _ROOT / "runtime"
+_LOG_FILE = _RUNTIME_DIR / "agent.log"
 
 
 def _setup_logger() -> logging.Logger:
@@ -16,12 +21,20 @@ def _setup_logger() -> logging.Logger:
             )
         except Exception:
             pass
+        formatter = logging.Formatter("%(asctime)s - [%(name)s] [%(levelname)s] - %(message)s")
         handler = logging.StreamHandler(sys.stdout)
         handler.setLevel(logging.DEBUG)
-        handler.setFormatter(
-            logging.Formatter("%(asctime)s - [%(name)s] [%(levelname)s] - %(message)s")
-        )
+        handler.setFormatter(formatter)
         logger.addHandler(handler)
+        try:
+            _RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+            file_handler = logging.FileHandler(_LOG_FILE, encoding="utf-8")
+            file_handler.setLevel(logging.DEBUG)
+            file_handler.setFormatter(formatter)
+            logger.addHandler(file_handler)
+        except Exception:
+            pass
+        logger.propagate = False
     return logger
 
 

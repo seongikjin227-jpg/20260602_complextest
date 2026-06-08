@@ -14,7 +14,7 @@ _CORRECT_COLUMN_MAP = {
     "TEST": "TEST_CORRECT_SQL",
 }
 _LEGACY_CORRECT_COLUMN = "CORRECT_SQL"
-_PENDING_JOB_STATUSES = ("URGENT", "FAIL", "READY", "PENDING", "SKIP")
+_PENDING_JOB_STATUSES = ("URGENT", "FAIL", "READY", "PENDING")
 _SQL_LENGTH_SHORT_MAX = 5000
 _DEFAULT_JOB_MAX_BATCH_COUNT = 30
 
@@ -209,9 +209,8 @@ def get_pending_jobs() -> list[SqlInfoJob]:
             WHEN UPPER(TRIM(STATUS)) = 'URGENT' THEN 1
             WHEN UPPER(TRIM(STATUS)) = 'READY' THEN 2
             WHEN UPPER(TRIM(STATUS)) = 'FAIL' THEN 3
-            WHEN UPPER(TRIM(STATUS)) = 'SKIP' THEN 4
-            WHEN UPPER(TRIM(STATUS)) = 'PENDING' THEN 5
-            WHEN STATUS IS NULL THEN 6
+            WHEN UPPER(TRIM(STATUS)) = 'PENDING' THEN 4
+            WHEN STATUS IS NULL THEN 5
             ELSE 9
           END,
           UPD_TS NULLS FIRST,
@@ -312,7 +311,7 @@ def get_formatting_jobs() -> list[SqlInfoJob]:
                TO_SQL_TEXT, {tuned_sql_column}, TUNED_TEST, BIND_SQL, BIND_SET, TEST_SQL, STATUS, LOG,
                UPD_TS, EDITED_YN, {fr_bindtuned_sql_column}, {select_correct_cols}, {sql_length_column}, {map_type_column}, FORMATTED_SQL, {tuned_result_column}
         FROM {table}
-        WHERE UPPER(TRIM(TUNED_TEST)) IN ('PASS', 'SKIP')
+        WHERE UPPER(TRIM(TUNED_TEST)) IN ('PASS', 'PASS_NON_SELECT')
           AND (
               FORMATTED_SQL IS NULL
               OR DBMS_LOB.GETLENGTH(FORMATTED_SQL) = 0

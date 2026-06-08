@@ -205,10 +205,20 @@ def _call_llm(chat_messages: list[dict]) -> str:
     return resp.choices[0].message.content.strip()
 
 # ── 오른쪽 상태 패널 ───────────────────────────────────────────────────────────
-_ICON = {"PASS": "✅", "FAIL": "❌", "RUNNING": "🔄", "READY": "🔵",
-         "SKIP": "⏭️", "NA": "🚫", "NULL": "⚫", "PENDING": "🟣"}
-_CLR  = {"PASS": "badge-pass", "FAIL": "badge-fail"}
-_STATUS_ORDER = ["PASS", "FAIL", "RUNNING", "SKIP", "PENDING", "NULL"]
+_ICON = {
+    "PASS": "✅",
+    "PASS (non-select)": "✅",
+    "FAIL": "❌",
+    "RUNNING": "🔄",
+    "READY": "🔵",
+    "SKIP": "⏭️",
+    "NA": "🚫",
+    "NULL": "⚫",
+    "SQL Conversion 단계": "⏳",
+    "PENDING": "🟣",
+}
+_CLR  = {"PASS": "badge-pass", "PASS (non-select)": "badge-pass", "FAIL": "badge-fail"}
+_STATUS_ORDER = ["PASS", "PASS (non-select)", "FAIL", "RUNNING", "SKIP", "PENDING", "NULL", "SQL Conversion 단계"]
 _PROGRESS_EXCLUDED = {"NA"}
 
 def _norm_status(status) -> str:
@@ -222,41 +232,46 @@ def _pct(numerator: int, denominator: int) -> str:
 def _sum_excluding(normalized: dict[str, int], excluded: set[str]) -> int:
     return sum(v for k, v in normalized.items() if k not in excluded)
 
-def _dashboard_status(status) -> str | None:
+def _dashboard_status(status, title: str = "") -> str | None:
     normalized = _norm_status(status)
     if normalized == "NA":
         return None
     if normalized in {"URGENT", "READY"}:
         return "RUNNING"
+    if "Tuning" in title and normalized == "NULL":
+        return "SQL Conversion 단계"
+    if normalized == "PASS_NON_SELECT":
+        return "PASS (non-select)"
     return normalized
 
 def _rate_values(title: str, normalized: dict[str, int]) -> tuple[int, int, int, int]:
     pass_count = normalized.get("PASS", 0)
+    pass_non_select_count = normalized.get("PASS (non-select)", 0)
     skip_count = normalized.get("SKIP", 0)
     fail_count = normalized.get("FAIL", 0)
 
     if "Tuning" in title:
-        progress_count = pass_count + skip_count
-        progress_base = _sum_excluding(normalized, {"NA", "NULL"})
+        progress_count = pass_count + pass_non_select_count
+        progress_base = _sum_excluding(normalized, {"NA", "NULL", "SQL Conversion 단계"})
     else:
         progress_count = pass_count
         progress_base = _sum_excluding(normalized, _PROGRESS_EXCLUDED)
 
-    success_count = pass_count
-    success_base = pass_count + fail_count
+    success_count = pass_count + pass_non_select_count
+    success_base = pass_count + pass_non_select_count + fail_count
     return progress_count, progress_base, success_count, success_base
 
 def _rate_html(title: str, summary: dict) -> str:
     normalized: dict[str, int] = {}
     for k, v in summary.items():
-        status = _dashboard_status(k)
+        status = _dashboard_status(k, title)
         if status is None:
             continue
         normalized[status] = normalized.get(status, 0) + int(v or 0)
 
     progress_count, progress_base, success_count, success_base = _rate_values(title, normalized)
     if "Tuning" in title:
-        rate_note = "진척률=(PASS+SKIP)/(NA,NULL 제외), 성공률=PASS/(PASS+FAIL)"
+        rate_note = "진척률=PASS 계열/(이전 단계 대기 제외), 성공률=PASS 계열/(PASS 계열+FAIL)"
     else:
         rate_note = "진척률=PASS/(NA 제외), 성공률=PASS/(PASS+FAIL)"
 
@@ -279,7 +294,7 @@ def _rate_html(title: str, summary: dict) -> str:
 def _status_card(title: str, summary: dict):
     normalized_summary: dict[str, int] = {}
     for k, v in summary.items():
-        status = _dashboard_status(k)
+        status = _dashboard_status(k, title)
         if status is None:
             continue
         normalized_summary[status] = normalized_summary.get(status, 0) + int(v or 0)
@@ -336,7 +351,7 @@ def _formatting_card(summary: dict):
           <div class="rate-sub">포맷팅 대기</div>
         </div>
       </div>
-      <div class="rate-note">적용률=FORMATTED_SQL 값 있음 / TUNED_TEST PASS 또는 SKIP</div>
+      <div class="rate-note">적용률=FORMATTED_SQL 값 있음 / TUNED_TEST PASS 계열</div>
       <div class="stat-row">
         <span class="stat-label">✅ 적용</span>
         <span class="stat-val badge-pass">{applied}</span>

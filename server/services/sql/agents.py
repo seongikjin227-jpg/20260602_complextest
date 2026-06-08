@@ -335,9 +335,9 @@ class SqlTuningAgent:
             self._apply_tuning_rules(state)
 
             if tag_kind != "SELECT":
-                state.tuned_test = "SKIP"
+                state.tuned_test = "PASS_NON_SELECT"
                 logger.info(
-                    f"[{self.name}] ({state.job_key}) stage=SKIP_TUNED_TEST_FOR_NON_SELECT "
+                    f"[{self.name}] ({state.job_key}) stage=PASS_TUNED_TEST_FOR_NON_SELECT "
                     f"completed (tag_kind={tag_kind or 'UNKNOWN'})"
                 )
                 break
@@ -365,7 +365,7 @@ class SqlTuningAgent:
 
         if state.tuned_test == "PASS":
             tobe_sql_tuning_service.increment_rule_hit_counts_for_success(state.tuning_examples)
-        if state.tuned_test in ("PASS", "SKIP"):
+        if state.tuned_test in ("PASS", "PASS_NON_SELECT"):
             state.formatted_sql = generate_formatted_sql(
                 job=state.job,
                 input_sql=state.tuned_sql or state.tobe_sql,
