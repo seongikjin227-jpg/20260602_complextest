@@ -152,6 +152,39 @@ def get_tuning_status_summary() -> dict[str, int]:
         return {}
 
 
+def get_formatting_summary() -> dict[str, int]:
+    """Return formatting guide application counts for completed tuning rows."""
+    q = f"""
+        SELECT
+            COUNT(*) AS TOTAL,
+            SUM(
+                CASE
+                    WHEN FORMATTED_SQL IS NOT NULL
+                     AND DBMS_LOB.GETLENGTH(FORMATTED_SQL) > 0
+                     AND LENGTH(TRIM(DBMS_LOB.SUBSTR(FORMATTED_SQL, 4000, 1))) > 0
+                    THEN 1
+                    ELSE 0
+                END
+            ) AS APPLIED
+        FROM {SQL_TABLE}
+        WHERE UPPER(TRIM(TUNED_TEST)) IN ('PASS', 'SKIP')
+    """
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(q)
+            row = cur.fetchone()
+            total = int(row[0] or 0) if row else 0
+            applied = int(row[1] or 0) if row else 0
+            return {
+                "TOTAL": total,
+                "APPLIED": applied,
+                "PENDING": max(total - applied, 0),
+            }
+    except Exception:
+        return {}
+
+
 # ── SQL / Tuning ──────────────────────────────────────────────────────────────
 
 def get_sql_jobs() -> list[dict]:

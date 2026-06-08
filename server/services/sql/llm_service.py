@@ -109,19 +109,18 @@ def _serialize_next_sql_complex_mapping_rules(
     sections.append("[COMPLEX_GENERAL_RULES]")
     if not general_rules:
         sections.append("- (empty)")
-    for rank, rule in enumerate(general_rules, start=1):
-        sections.extend(_format_complex_map_rule(rule, target_schema=target_schema, rank=rank))
+    for rule in general_rules:
+        sections.extend(_format_complex_map_rule(rule, target_schema=target_schema))
 
     sections.append("")
     sections.append("[COMPLEX_SEARCH_RULES_TOP_K]")
     if not search_rules:
         sections.append("- (empty)")
-    for rank, rule in enumerate(search_rules, start=1):
+    for rule in search_rules:
         sections.extend(
             _format_complex_map_rule(
                 rule,
                 target_schema=target_schema,
-                rank=rank,
             )
         )
     return "\n".join(sections)
@@ -130,10 +129,8 @@ def _serialize_next_sql_complex_mapping_rules(
 def _format_complex_map_rule(
     rule: ComplexMappingRuleItem,
     target_schema: str,
-    rank: int | None = None,
 ) -> list[str]:
-    label = f"COMPLEX_RULE_{rank}" if rank is not None else "COMPLEX_RULE"
-    lines = [f"\n## {label}"]
+    lines = [""]
     lines.append(f"FR_TABLE={(rule.fr_table or '').strip()}")
     lines.append("FR_COL_OR_PATTERN:")
     lines.append("```sql")

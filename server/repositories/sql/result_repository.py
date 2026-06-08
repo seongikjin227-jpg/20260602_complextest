@@ -313,7 +313,11 @@ def get_formatting_jobs() -> list[SqlInfoJob]:
                UPD_TS, EDITED_YN, {fr_bindtuned_sql_column}, {select_correct_cols}, {sql_length_column}, {map_type_column}, FORMATTED_SQL, {tuned_result_column}
         FROM {table}
         WHERE UPPER(TRIM(TUNED_TEST)) IN ('PASS', 'SKIP')
-          AND FORMATTED_SQL IS NULL
+          AND (
+              FORMATTED_SQL IS NULL
+              OR DBMS_LOB.GETLENGTH(FORMATTED_SQL) = 0
+              OR LENGTH(TRIM(DBMS_LOB.SUBSTR(FORMATTED_SQL, 4000, 1))) = 0
+          )
           {batch_limit_clause}
         ORDER BY
           UPD_TS NULLS FIRST,

@@ -10,6 +10,7 @@ from utils.db import (
     get_mig_status_summary,
     get_sql_status_summary,
     get_tuning_status_summary,
+    get_formatting_summary,
     get_recent_fails,
     get_mig_jobs,
     get_mig_logs,
@@ -307,6 +308,45 @@ def _status_card(title: str, summary: dict):
       {rows}
     </div>""", unsafe_allow_html=True)
 
+
+def _formatting_card(summary: dict):
+    total = int(summary.get("TOTAL", 0) or 0)
+    applied = int(summary.get("APPLIED", 0) or 0)
+    pending = int(summary.get("PENDING", 0) or 0)
+    if total <= 0:
+        st.markdown("""
+        <div class="stat-card">
+          <div class="stat-card-title">🧾 Formatting Guide</div>
+          <span style="color:#9ca3af;font-size:13px">데이터 없음</span>
+        </div>""", unsafe_allow_html=True)
+        return
+
+    st.markdown(f"""
+    <div class="stat-card">
+      <div class="stat-card-title">🧾 Formatting Guide &nbsp;<span style="font-weight:400;color:#adb5bd">총 {total}건</span></div>
+      <div class="rate-grid">
+        <div class="rate-box">
+          <div class="rate-label">적용률</div>
+          <div class="rate-value">{_pct(applied, total)}</div>
+          <div class="rate-sub">{applied}/{total}건</div>
+        </div>
+        <div class="rate-box">
+          <div class="rate-label">미적용</div>
+          <div class="rate-value">{pending}</div>
+          <div class="rate-sub">포맷팅 대기</div>
+        </div>
+      </div>
+      <div class="rate-note">적용률=FORMATTED_SQL 값 있음 / TUNED_TEST PASS 또는 SKIP</div>
+      <div class="stat-row">
+        <span class="stat-label">✅ 적용</span>
+        <span class="stat-val badge-pass">{applied}</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">⚫ 미적용</span>
+        <span class="stat-val badge-etc">{pending}</span>
+      </div>
+    </div>""", unsafe_allow_html=True)
+
 # ── 메인 렌더 ─────────────────────────────────────────────────────────────────
 def render():
     st.markdown(CSS, unsafe_allow_html=True)
@@ -427,6 +467,10 @@ def render():
             st.error(str(e))
         try:
             _status_card("⚡ Tuning", get_tuning_status_summary())
+        except Exception as e:
+            st.error(str(e))
+        try:
+            _formatting_card(get_formatting_summary())
         except Exception as e:
             st.error(str(e))
 
