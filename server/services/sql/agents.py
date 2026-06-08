@@ -334,6 +334,14 @@ class SqlTuningAgent:
         for tuning_attempt in range(1, max_tuning_attempts + 1):
             self._apply_tuning_rules(state)
 
+            if self._is_no_tuning_result(state.tuned_result):
+                state.tuned_test = "PASS"
+                logger.info(
+                    f"[{self.name}] ({state.job_key}) stage=PASS_TUNED_TEST_FOR_NO_TUNING "
+                    "completed (reason=no_tuning)"
+                )
+                break
+
             if tag_kind != "SELECT":
                 state.tuned_test = "PASS_NON_SELECT"
                 logger.info(
@@ -363,7 +371,7 @@ class SqlTuningAgent:
                 f"attempt={tuning_attempt + 1}/{max_tuning_attempts} last_error={state.last_error}"
             )
 
-        if state.tuned_test == "PASS":
+        if state.tuned_test == "PASS" and not self._is_no_tuning_result(state.tuned_result):
             tobe_sql_tuning_service.increment_rule_hit_counts_for_success(state.tuning_examples)
         if state.tuned_test in ("PASS", "PASS_NON_SELECT"):
             state.formatted_sql = generate_formatted_sql(
@@ -414,6 +422,10 @@ class SqlTuningAgent:
             current_sql = tuned_sql
 
         state.tuned_sql = current_sql
+
+    @staticmethod
+    def _is_no_tuning_result(tuned_result: str | None) -> bool:
+        return "NO TUNING" in (tuned_result or "").upper()
 
     def _run_tuned_sql_validation(self, state: JobExecutionState) -> None:
         comparison_test_sql = generate_sql_comparison_test_sql(
