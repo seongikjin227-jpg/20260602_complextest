@@ -52,11 +52,12 @@ def start() -> str:
         return "이미 실행 중입니다."
     _RUNTIME.mkdir(exist_ok=True)
     _PAUSE_FILE.unlink(missing_ok=True)
-    subprocess.Popen(
+    process = subprocess.Popen(
         [sys.executable, str(_MAIN_PY)],
         cwd=str(_ROOT),
         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
     )
+    _PID_FILE.write_text(str(process.pid), encoding="utf-8")
     return "에이전트를 시작했습니다."
 
 

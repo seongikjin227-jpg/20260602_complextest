@@ -232,15 +232,28 @@ def _pct(numerator: int, denominator: int) -> str:
 def _sum_excluding(normalized: dict[str, int], excluded: set[str]) -> int:
     return sum(v for k, v in normalized.items() if k not in excluded)
 
+def _is_tuning_title(title: str) -> bool:
+    return "TUNING" in str(title or "").upper()
+
 def _dashboard_status(status, title: str = "") -> str | None:
     normalized = _norm_status(status)
     if normalized == "NA":
         return None
     if normalized in {"URGENT", "READY"}:
         return "RUNNING"
-    if "Tuning" in title and normalized == "NULL":
+    if _is_tuning_title(title) and normalized == "NULL":
         return "SQL Conversion 단계"
-    if normalized == "PASS_NON_SELECT":
+    if (
+        normalized in {
+            "PASS_NON_SELECT",
+            "PASS (NON-SELECT)",
+            "PASS(NON-SELECT)",
+            "PASS NON SELECT",
+            "PASS-NON-SELECT",
+        }
+        or "NON_SELECT" in normalized
+        or "NON-SELECT" in normalized
+    ):
         return "PASS (non-select)"
     return normalized
 
@@ -250,27 +263,20 @@ def _rate_values(title: str, normalized: dict[str, int]) -> tuple[int, int, int,
     skip_count = normalized.get("SKIP", 0)
     fail_count = normalized.get("FAIL", 0)
 
-    if "Tuning" in title:
+    if _is_tuning_title(title):
         progress_count = pass_count + pass_non_select_count
         progress_base = _sum_excluding(normalized, {"NA", "NULL", "SQL Conversion 단계"})
     else:
         progress_count = pass_count
         progress_base = _sum_excluding(normalized, _PROGRESS_EXCLUDED)
 
-    success_count = pass_count + pass_non_select_count
-    success_base = pass_count + pass_non_select_count + fail_count
+    success_count = pass_count
+    success_base = pass_count + fail_count
     return progress_count, progress_base, success_count, success_base
 
-def _rate_html(title: str, summary: dict) -> str:
-    normalized: dict[str, int] = {}
-    for k, v in summary.items():
-        status = _dashboard_status(k, title)
-        if status is None:
-            continue
-        normalized[status] = normalized.get(status, 0) + int(v or 0)
-
+def _rate_html(title: str, normalized: dict[str, int]) -> str:
     progress_count, progress_base, success_count, success_base = _rate_values(title, normalized)
-    if "Tuning" in title:
+    if _is_tuning_title(title):
         rate_note = "진척률=PASS 계열/(이전 단계 대기 제외), 성공률=PASS 계열/(PASS 계열+FAIL)"
     else:
         rate_note = "진척률=PASS/(NA 제외), 성공률=PASS/(PASS+FAIL)"

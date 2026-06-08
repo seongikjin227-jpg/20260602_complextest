@@ -4,7 +4,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 _ROOT = Path(__file__).resolve().parent.parent
-_LOG_FILE = _ROOT / "runtime" / "agent.log"
 
 import streamlit as st
 
@@ -16,6 +15,7 @@ st.set_page_config(
 )
 
 from pages.dashboard import render as render_dashboard
+from pages.agent_metrics import render as render_metrics
 from pages.job_detail import render as render_job_detail
 from pages.mig_monitor import render as render_mig
 from pages.rag_manager_page import render as render_rag
@@ -37,6 +37,7 @@ _MENU = {
     "🩺 System Health": render_health,
     "⚙️ Settings": render_settings,
     "📦 XML Export": render_xml,
+    "📈 Agent Metrics": render_metrics,
 }
 
 st.markdown(
@@ -126,22 +127,6 @@ with st.sidebar:
             if st.button("⏹️ 중지", width="stretch", type="secondary"):
                 st.toast(stop())
                 st.rerun()
-
-    st.markdown("---")
-    st.markdown("#### 📋 로그")
-    col_log1, col_log2 = st.columns([3, 1])
-    with col_log1:
-        log_lines = st.number_input("로그 줄 수", min_value=10, max_value=200, value=30, step=10, label_visibility="collapsed")
-    with col_log2:
-        if st.button("↻", help="새로고침", width="stretch"):
-            st.rerun()
-
-    if _LOG_FILE.exists():
-        lines = _LOG_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()
-        tail = "\n".join(lines[-int(log_lines):])
-        st.code(tail if tail else "(로그 없음)", language=None)
-    else:
-        st.caption("에이전트 시작 후 로그가 생성됩니다.")
 
     st.markdown("---")
     st.caption("Unified Multi-Agent Pipeline")

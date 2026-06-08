@@ -18,6 +18,8 @@ ORACLE_CLIENT_PATH = os.getenv("ORACLE_CLIENT_PATH", "")
 MIG_TABLE    = os.getenv("MAPPING_RULE_TABLE", "NEXT_MIG_INFO")
 MIG_DTL_TABLE = os.getenv("MAPPING_RULE_DETAIL_TABLE", "NEXT_MIG_INFO_DTL").strip()
 SQL_TABLE    = os.getenv("RESULT_TABLE", "NEXT_SQL_INFO")
+AGENT_METRICS_TABLE = os.getenv("AGENT_METRICS_TABLE", "AG_AGENT_RUN_METRICS")
+SQL_LOG_TABLE = os.getenv("SQL_LOG_TABLE", "NEXT_SQL_LOG")
 
 _thick_done = False
 
@@ -239,6 +241,154 @@ def get_xml_export_sqls() -> list[dict]:
 def get_tuned_pass_sqls() -> list[dict]:
     """Backward-compatible alias for older XML export callers."""
     return get_xml_export_sqls()
+
+
+# ── Agent operation metrics ─────────────────────────────────────────────
+
+def get_recent_agent_run_metrics(limit: int = 200) -> list[dict]:
+    q = f"""
+        SELECT *
+        FROM (
+            SELECT RUN_ID, BATCH_NO, CYCLE_NO, AGENT_NAME,
+                   JOB_COUNT, SUCCESS_COUNT, FAIL_COUNT, SKIP_COUNT,
+                   TO_CHAR(STARTED_AT, 'YYYY-MM-DD HH24:MI:SS') AS STARTED_AT,
+                   TO_CHAR(FINISHED_AT, 'YYYY-MM-DD HH24:MI:SS') AS FINISHED_AT,
+                   ELAPSED_SECONDS
+            FROM {AGENT_METRICS_TABLE}
+            ORDER BY RUN_ID DESC
+        )
+        WHERE ROWNUM <= :1
+    """
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(q, (int(limit),))
+            return _to_dicts(cur)
+    except Exception:
+        return []
+
+
+def get_agent_batch_summary(limit: int = 50) -> list[dict]:
+    q = f"""
+        SELECT *
+        FROM (
+            SELECT BATCH_NO,
+                   MIN(STARTED_AT) AS STARTED_AT,
+                   MAX(FINISHED_AT) AS FINISHED_AT,
+                   ROUND((MAX(FINISHED_AT) - MIN(STARTED_AT)) * 86400, 3) AS WALL_SECONDS,
+                   SUM(NVL(ELAPSED_SECONDS, 0)) AS SUM_AGENT_SECONDS,
+                   SUM(NVL(JOB_COUNT, 0)) AS JOB_COUNT,
+                   SUM(NVL(SUCCESS_COUNT, 0)) AS SUCCESS_COUNT,
+                   SUM(NVL(FAIL_COUNT, 0)) AS FAIL_COUNT,
+                   SUM(NVL(SKIP_COUNT, 0)) AS SKIP_COUNT,
+                   COUNT(*) AS AGENT_RUNS
+            FROM {AGENT_METRICS_TABLE}
+            GROUP BY BATCH_NO
+            ORDER BY BATCH_NO DESC
+        )
+        WHERE ROWNUM <= :1
+    """
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(q, (int(limit),))
+            rows = []
+            for r in cur.fetchall():
+                rows.append({
+                    "BATCH_NO": _s(r[0]),
+                    "STARTED_AT": _s(r[1]),
+                    "FINISHED_AT": _s(r[2]),
+                    "WALL_SECONDS": _s(r[3]),
+                    "SUM_AGENT_SECONDS": _s(r[4]),
+                    "JOB_COUNT": _s(r[5]),
+                    "SUCCESS_COUNT": _s(r[6]),
+                    "FAIL_COUNT": _s(r[7]),
+                    "SKIP_COUNT": _s(r[8]),
+                    "AGENT_RUNS": _s(r[9]),
+                })
+            return rows
+    except Exception:
+        return []
+
+
+def get_agent_name_summary(limit: int = 500) -> list[dict]:
+    q = f"""
+        SELECT AGENT_NAME,
+               COUNT(*) AS RUN_COUNT,
+               SUM(NVL(JOB_COUNT, 0)) AS JOB_COUNT,
+               ROUND(AVG(NVL(ELAPSED_SECONDS, 0)), 3) AS AVG_SECONDS,
+               ROUND(MIN(NVL(ELAPSED_SECONDS, 0)), 3) AS MIN_SECONDS,
+               ROUND(MAX(NVL(ELAPSED_SECONDS, 0)), 3) AS MAX_SECONDS,
+               SUM(NVL(SUCCESS_COUNT, 0)) AS SUCCESS_COUNT,
+               SUM(NVL(FAIL_COUNT, 0)) AS FAIL_COUNT,
+               SUM(NVL(SKIP_COUNT, 0)) AS SKIP_COUNT
+        FROM (
+            SELECT *
+            FROM {AGENT_METRICS_TABLE}
+            ORDER BY RUN_ID DESC
+        )
+        WHERE ROWNUM <= :1
+        GROUP BY AGENT_NAME
+        ORDER BY AVG_SECONDS DESC
+    """
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(q, (int(limit),))
+            return _to_dicts(cur)
+    except Exception:
+        return []
+
+
+def get_sql_stage_summary(limit: int = 100) -> list[dict]:
+    q = f"""
+        SELECT NVL(STAGE_NAME, SQL_KIND) AS STAGE_NAME,
+               COUNT(*) AS LOG_COUNT,
+               ROUND(AVG(NVL(ELAPSED_SECONDS, 0)), 3) AS AVG_SECONDS,
+               ROUND(MIN(NVL(ELAPSED_SECONDS, 0)), 3) AS MIN_SECONDS,
+               ROUND(MAX(NVL(ELAPSED_SECONDS, 0)), 3) AS MAX_SECONDS,
+               SUM(CASE WHEN UPPER(NVL(STATUS, '')) IN ('PASS', 'SUCCESS') THEN 1 ELSE 0 END) AS PASS_COUNT,
+               SUM(CASE WHEN UPPER(NVL(STATUS, '')) = 'FAIL' THEN 1 ELSE 0 END) AS FAIL_COUNT,
+               SUM(CASE WHEN ERROR_MESSAGE IS NOT NULL THEN 1 ELSE 0 END) AS ERROR_COUNT
+        FROM (
+            SELECT *
+            FROM {SQL_LOG_TABLE}
+            ORDER BY LOG_ID DESC
+        )
+        WHERE ROWNUM <= :1
+        GROUP BY NVL(STAGE_NAME, SQL_KIND)
+        ORDER BY AVG_SECONDS DESC, LOG_COUNT DESC
+    """
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(q, (int(limit),))
+            return _to_dicts(cur)
+    except Exception:
+        return []
+
+
+def get_recent_sql_stage_logs(limit: int = 100) -> list[dict]:
+    q = f"""
+        SELECT *
+        FROM (
+            SELECT LOG_ID,
+                   TO_CHAR(CREATED_AT, 'YYYY-MM-DD HH24:MI:SS') AS CREATED_AT,
+                   SPACE_NM, SQL_ID, SQL_KIND, STATUS, STAGE_NAME,
+                   PROMPT_NAME, MODEL_NAME, BATCH_NO, CYCLE_NO,
+                   ELAPSED_SECONDS, ATTEMPT_NO, ERROR_MESSAGE
+            FROM {SQL_LOG_TABLE}
+            ORDER BY LOG_ID DESC
+        )
+        WHERE ROWNUM <= :1
+    """
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(q, (int(limit),))
+            return _to_dicts(cur)
+    except Exception:
+        return []
 
 
 def get_sql_job_full(row_id: str) -> dict | None:
