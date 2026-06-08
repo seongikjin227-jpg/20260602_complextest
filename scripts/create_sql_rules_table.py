@@ -17,12 +17,14 @@ DDL = """
 CREATE TABLE NEXT_SQL_RULES (
     RULE_ID           VARCHAR2(100)  NOT NULL,
     RULE_TYPE         VARCHAR2(20)   DEFAULT 'SEARCH' NOT NULL,
+    USE_YN            VARCHAR2(1)    DEFAULT 'Y' NOT NULL,
     GUIDANCE          VARCHAR2(4000) NOT NULL,
     EXAMPLE_BAD_SQL   CLOB,
     EXAMPLE_TUNED_SQL CLOB,
     CREATED_AT        TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
     UPDATED_AT        TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT CK_NEXT_SQL_RULES_TYPE CHECK (RULE_TYPE IN ('GENERAL', 'SEARCH')),
+    CONSTRAINT CK_NEXT_SQL_RULES_USE_YN CHECK (USE_YN IN ('Y', 'N')),
     CONSTRAINT PK_NEXT_SQL_RULES PRIMARY KEY (RULE_ID)
 )
 """
@@ -75,6 +77,9 @@ def main():
             if not column_exists(cur, "NEXT_SQL_RULES", "RULE_TYPE"):
                 cur.execute("ALTER TABLE NEXT_SQL_RULES ADD (RULE_TYPE VARCHAR2(20) DEFAULT 'SEARCH' NOT NULL)")
                 print("✅ RULE_TYPE 컬럼 추가 완료")
+            if not column_exists(cur, "NEXT_SQL_RULES", "USE_YN"):
+                cur.execute("ALTER TABLE NEXT_SQL_RULES ADD (USE_YN VARCHAR2(1) DEFAULT 'Y' NOT NULL)")
+                print("✅ USE_YN 컬럼 추가 완료")
         else:
             cur.execute(DDL)
             print("✅ NEXT_SQL_RULES 테이블 생성 완료")
@@ -110,8 +115,8 @@ def main():
             else:
                 cur.execute(
                     """INSERT INTO NEXT_SQL_RULES
-                           (RULE_ID, RULE_TYPE, GUIDANCE, EXAMPLE_BAD_SQL, EXAMPLE_TUNED_SQL)
-                       VALUES (:1, :2, :3, :4, :5)""",
+                           (RULE_ID, RULE_TYPE, USE_YN, GUIDANCE, EXAMPLE_BAD_SQL, EXAMPLE_TUNED_SQL)
+                       VALUES (:1, :2, 'Y', :3, :4, :5)""",
                     (rule_id, rule_type, guidance, bad_sql, tuned_sql),
                 )
                 inserted += 1

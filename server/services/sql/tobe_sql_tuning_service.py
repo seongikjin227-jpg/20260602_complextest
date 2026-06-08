@@ -178,12 +178,16 @@ class TobeSqlTuningService:
                 type_filter = ""
                 if expected_rule_type and "RULE_TYPE" in columns:
                     type_filter = " AND UPPER(TRIM(NVL(RULE_TYPE, 'SEARCH'))) = :rule_type"
+                use_filter = ""
+                if "USE_YN" in columns:
+                    use_filter = " AND UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'"
 
                 update_sql = f"""
                     UPDATE NEXT_SQL_RULES
                     SET HIT_CNT = NVL(HIT_CNT, 0) + 1
                     WHERE RULE_ID = :rule_id
                     {type_filter}
+                    {use_filter}
                 """
                 if type_filter:
                     binds = [
@@ -294,11 +298,12 @@ class TobeSqlTuningService:
         with get_connection() as conn:
             cur = conn.cursor()
             columns = self._get_table_columns(cur, "NEXT_SQL_RULES")
-            scope_filter = (
-                "WHERE UPPER(TRIM(NVL(RULE_TYPE, 'SEARCH'))) = 'SEARCH'"
-                if "RULE_TYPE" in columns
-                else ""
-            )
+            where_clauses: list[str] = []
+            if "RULE_TYPE" in columns:
+                where_clauses.append("UPPER(TRIM(NVL(RULE_TYPE, 'SEARCH'))) = 'SEARCH'")
+            if "USE_YN" in columns:
+                where_clauses.append("UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'")
+            scope_filter = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
             q = f"""
                 SELECT RULE_ID, GUIDANCE, EXAMPLE_BAD_SQL, EXAMPLE_TUNED_SQL
                 FROM NEXT_SQL_RULES
@@ -336,10 +341,14 @@ class TobeSqlTuningService:
             columns = self._get_table_columns(cur, "NEXT_SQL_RULES")
             if "RULE_TYPE" not in columns:
                 return []
-            q = """
+            use_filter = ""
+            if "USE_YN" in columns:
+                use_filter = " AND UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'"
+            q = f"""
                 SELECT RULE_ID, GUIDANCE
                 FROM NEXT_SQL_RULES
                 WHERE UPPER(TRIM(RULE_TYPE)) = 'GENERAL'
+                {use_filter}
                 ORDER BY CREATED_AT ASC
             """
             cur.execute(q)
