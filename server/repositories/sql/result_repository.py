@@ -315,7 +315,6 @@ def get_formatting_jobs() -> list[SqlInfoJob]:
           AND (
               FORMATTED_SQL IS NULL
               OR DBMS_LOB.GETLENGTH(FORMATTED_SQL) = 0
-              OR LENGTH(TRIM(DBMS_LOB.SUBSTR(FORMATTED_SQL, 4000, 1))) = 0
           )
           {batch_limit_clause}
         ORDER BY

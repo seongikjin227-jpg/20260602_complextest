@@ -9,6 +9,7 @@ from openai import OpenAI
 from utils.db import (
     get_mig_status_summary,
     get_sql_status_summary,
+    get_sql_length_success_summary,
     get_tuning_status_summary,
     get_formatting_summary,
     get_recent_fails,
@@ -297,7 +298,31 @@ def _rate_html(title: str, normalized: dict[str, int]) -> str:
       <div class="rate-note">{rate_note}</div>
     """
 
-def _status_card(title: str, summary: dict):
+def _length_success_html(length_summary: dict[str, dict[str, int]]) -> str:
+    short_pass = int(length_summary.get("SHORT", {}).get("PASS", 0) or 0)
+    short_fail = int(length_summary.get("SHORT", {}).get("FAIL", 0) or 0)
+    long_pass = int(length_summary.get("LONG", {}).get("PASS", 0) or 0)
+    long_fail = int(length_summary.get("LONG", {}).get("FAIL", 0) or 0)
+    short_base = short_pass + short_fail
+    long_base = long_pass + long_fail
+    return f"""
+      <div class="rate-grid">
+        <div class="rate-box">
+          <div class="rate-label">SQL ≤ 5000 성공률</div>
+          <div class="rate-value">{_pct(short_pass, short_base)}</div>
+          <div class="rate-sub">{short_pass}/{short_base}건</div>
+        </div>
+        <div class="rate-box">
+          <div class="rate-label">SQL > 5000 성공률</div>
+          <div class="rate-value">{_pct(long_pass, long_base)}</div>
+          <div class="rate-sub">{long_pass}/{long_base}건</div>
+        </div>
+      </div>
+      <div class="rate-note">Length 기준: FR_SQL_TEXT ≤ 5000 and (EDIT_FR_SQL ≤ 5000 or EDIT_FR_SQL is NULL)</div>
+    """
+
+
+def _status_card(title: str, summary: dict, extra_html: str = ""):
     normalized_summary: dict[str, int] = {}
     for k, v in summary.items():
         status = _dashboard_status(k, title)
@@ -326,6 +351,7 @@ def _status_card(title: str, summary: dict):
     <div class="stat-card">
       <div class="stat-card-title">{title} &nbsp;<span style="font-weight:400;color:#adb5bd">총 {total}건</span></div>
       {_rate_html(title, normalized_summary)}
+      {extra_html}
       {rows}
     </div>""", unsafe_allow_html=True)
 
@@ -483,7 +509,11 @@ def render():
         except Exception as e:
             st.error(str(e))
         try:
-            _status_card("🔄 SQL",    get_sql_status_summary())
+            _status_card(
+                "🔄 SQL",
+                get_sql_status_summary(),
+                extra_html=_length_success_html(get_sql_length_success_summary()),
+            )
         except Exception as e:
             st.error(str(e))
         try:

@@ -163,7 +163,6 @@ def get_formatting_summary() -> dict[str, int]:
                 CASE
                     WHEN FORMATTED_SQL IS NOT NULL
                      AND DBMS_LOB.GETLENGTH(FORMATTED_SQL) > 0
-                     AND LENGTH(TRIM(DBMS_LOB.SUBSTR(FORMATTED_SQL, 4000, 1))) > 0
                     THEN 1
                     ELSE 0
                 END
@@ -217,6 +216,47 @@ def get_sql_status_summary() -> dict[str, int]:
             return {_s(r[0]) or "NULL": r[1] for r in cur.fetchall()}
     except Exception:
         return {}
+
+
+def get_sql_length_success_summary(short_limit: int = 5000) -> dict[str, dict[str, int]]:
+    """Return SQL conversion PASS/FAIL success base split by effective SQL length."""
+    q = f"""
+        SELECT LENGTH_GROUP,
+               SUM(CASE WHEN UPPER(TRIM(STATUS)) = 'PASS' THEN 1 ELSE 0 END) AS PASS_COUNT,
+               SUM(CASE WHEN UPPER(TRIM(STATUS)) = 'FAIL' THEN 1 ELSE 0 END) AS FAIL_COUNT
+        FROM (
+            SELECT
+                CASE
+                    WHEN NVL(DBMS_LOB.GETLENGTH(FR_SQL_TEXT), 0) <= :1
+                     AND (
+                         EDIT_FR_SQL IS NULL
+                         OR NVL(DBMS_LOB.GETLENGTH(EDIT_FR_SQL), 0) <= :1
+                     )
+                    THEN 'SHORT'
+                    ELSE 'LONG'
+                END AS LENGTH_GROUP,
+                STATUS
+            FROM {SQL_TABLE}
+            WHERE UPPER(TRIM(NVL(STATUS, 'NULL'))) IN ('PASS', 'FAIL')
+        )
+        GROUP BY LENGTH_GROUP
+    """
+    result = {
+        "SHORT": {"PASS": 0, "FAIL": 0},
+        "LONG": {"PASS": 0, "FAIL": 0},
+    }
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(q, (int(short_limit),))
+            for group_name, pass_count, fail_count in cur.fetchall():
+                key = _s(group_name).upper() or "LONG"
+                result.setdefault(key, {"PASS": 0, "FAIL": 0})
+                result[key]["PASS"] = int(pass_count or 0)
+                result[key]["FAIL"] = int(fail_count or 0)
+    except Exception:
+        pass
+    return result
 
 
 def get_xml_export_sqls() -> list[dict]:
