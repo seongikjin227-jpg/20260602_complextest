@@ -22,6 +22,7 @@ AGENT_METRICS_TABLE = os.getenv("AGENT_METRICS_TABLE", "AG_AGENT_RUN_METRICS")
 SQL_LOG_TABLE = os.getenv("SQL_LOG_TABLE", "NEXT_SQL_LOG")
 
 _thick_done = False
+_AVAILABLE_COLUMNS_CACHE: dict[str, set[str]] = {}
 
 
 def get_connection():
@@ -54,6 +55,52 @@ def _s(val, default="") -> str:
 def _to_dicts(cur) -> list[dict]:
     cols = [d[0] for d in cur.description]
     return [{cols[i]: _s(row[i]) for i in range(len(cols))} for row in cur.fetchall()]
+
+
+def _split_table_owner_and_name(table: str) -> tuple[str | None, str]:
+    value = (table or "").strip().upper()
+    if "." in value:
+        owner, table_name = value.split(".", 1)
+        return owner.strip('"'), table_name.strip('"')
+    return None, value.strip('"')
+
+
+def _get_available_columns(table: str) -> set[str]:
+    owner, table_name = _split_table_owner_and_name(table)
+    cache_key = f"{owner or ''}.{table_name}"
+    if cache_key in _AVAILABLE_COLUMNS_CACHE:
+        return _AVAILABLE_COLUMNS_CACHE[cache_key]
+
+    if owner:
+        q = """
+            SELECT COLUMN_NAME
+            FROM ALL_TAB_COLUMNS
+            WHERE OWNER = :1
+              AND TABLE_NAME = :2
+        """
+        params = (owner, table_name)
+    else:
+        q = """
+            SELECT COLUMN_NAME
+            FROM USER_TAB_COLUMNS
+            WHERE TABLE_NAME = :1
+        """
+        params = (table_name,)
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(q, params)
+        columns = {_s(row[0]).upper() for row in cur.fetchall()}
+
+    _AVAILABLE_COLUMNS_CACHE[cache_key] = columns
+    return columns
+
+
+def _optional_column_expr(column_name: str, available_columns: set[str], data_type: str = "VARCHAR2(4000)") -> str:
+    column = column_name.upper()
+    if column in available_columns:
+        return column
+    return f"CAST(NULL AS {data_type}) AS {column}"
 
 
 # ── Mig ──────────────────────────────────────────────────────────────────────
@@ -189,11 +236,38 @@ def get_formatting_summary() -> dict[str, int]:
 # ── SQL / Tuning ──────────────────────────────────────────────────────────────
 
 def get_sql_jobs() -> list[dict]:
+    available_columns = _get_available_columns(SQL_TABLE)
+    target_table_column = _optional_column_expr("TARGET_TABLE", available_columns)
+    edit_fr_sql_column = _optional_column_expr("EDIT_FR_SQL", available_columns)
+    tuned_sql_column = _optional_column_expr("TUNED_SQL", available_columns)
+    tuned_test_column = _optional_column_expr("TUNED_TEST", available_columns)
+    tuned_result_column = _optional_column_expr("TUNED_RESULT", available_columns)
+    formatted_sql_column = _optional_column_expr("FORMATTED_SQL", available_columns)
+    block_rag_column = _optional_column_expr("BLOCK_RAG_CONTENT", available_columns)
+    sql_length_column = _optional_column_expr("SQL_LENGTH", available_columns)
+    map_type_column = _optional_column_expr("MAP_TYPE", available_columns)
+    edited_yn_column = _optional_column_expr("EDITED_YN", available_columns)
+    edit_len_expr = "DBMS_LOB.GETLENGTH(EDIT_FR_SQL)" if "EDIT_FR_SQL" in available_columns else "0"
+    tuned_len_expr = "DBMS_LOB.GETLENGTH(TUNED_SQL)" if "TUNED_SQL" in available_columns else "0"
+    formatted_len_expr = "DBMS_LOB.GETLENGTH(FORMATTED_SQL)" if "FORMATTED_SQL" in available_columns else "0"
+
     q = f"""
         SELECT ROWIDTOCHAR(ROWID) AS ROW_ID,
                TAG_KIND, SPACE_NM, SQL_ID,
-               FR_SQL_TEXT, TO_SQL_TEXT, TUNED_SQL, TUNED_TEST, TUNED_RESULT,
-               FORMATTED_SQL, BLOCK_RAG_CONTENT,
+               FR_SQL_TEXT, {edit_fr_sql_column}, {target_table_column},
+               TO_SQL_TEXT, {tuned_sql_column}, {tuned_test_column}, {tuned_result_column},
+               {formatted_sql_column}, {block_rag_column},
+               {sql_length_column}, {map_type_column}, {edited_yn_column},
+               DBMS_LOB.GETLENGTH(FR_SQL_TEXT) AS FR_SQL_LEN,
+               {edit_len_expr} AS EDIT_FR_SQL_LEN,
+               CASE
+                   WHEN NVL({edit_len_expr}, 0) > 0
+                   THEN {edit_len_expr}
+                   ELSE DBMS_LOB.GETLENGTH(FR_SQL_TEXT)
+               END AS EFFECTIVE_FR_SQL_LEN,
+               DBMS_LOB.GETLENGTH(TO_SQL_TEXT) AS TO_SQL_LEN,
+               {tuned_len_expr} AS TUNED_SQL_LEN,
+               {formatted_len_expr} AS FORMATTED_SQL_LEN,
                STATUS, LOG, TO_CHAR(UPD_TS) AS UPD_TS
         FROM {SQL_TABLE}
         ORDER BY UPD_TS DESC NULLS LAST
