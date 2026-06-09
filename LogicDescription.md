@@ -791,8 +791,7 @@ generate_tobe_sql(job, mapping_rules, last_error)
                NEXT_SQL_COMPLEX_MAP
                WHERE USE_YN='Y'
                  AND MAP_KIND='SEARCH'
-                 AND FR_TABLE IN complex_target_tables
-               전체 후보 조회
+               전체 활성 SEARCH 후보 조회
                query SQL = EDIT_FR_SQL if present else FR_SQL_TEXT
                embedding target = FR_COL only
                top-k = COMPLEX_MAP_SEARCH_TOP_K, default 3
@@ -826,7 +825,7 @@ NEXT_SQL_COMPLEX_MAP:
   TO_COL = 단일 TO-BE column 또는 TO-BE SQL pattern
   SIMPLE_MAPPING_RULES = complex table에 없는 target table의 기존 NEXT_MIG_INFO mapping
   COMPLEX_GENERAL_RULES = complex table에 있는 target table의 GENERAL rule 전부
-  COMPLEX_SEARCH_RULES_TOP_K = complex table에 있는 target table의 SEARCH rule 중 FR_COL 기준 vector search top-k
+  COMPLEX_SEARCH_RULES_TOP_K = FR_TABLE과 무관하게 전체 활성 SEARCH rule 중 FR_COL 기준 vector search top-k
   MAP_ID, MAP_KIND, 검색 점수, DESCRIPTION은 prompt에 전달하지 않음
   correct SQL hint는 제외
 ```

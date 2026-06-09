@@ -99,8 +99,8 @@ def has_complex_mapping_rules(target_table: str | None) -> bool:
     query = f"""
         SELECT COUNT(*)
         FROM {table}
-        WHERE UPPER(TRIM(USE_YN)) = 'Y'
-          AND UPPER(TRIM(FR_TABLE)) = :1
+        WHERE USE_YN = 'Y'
+          AND FR_TABLE = :1
     """
     with get_connection() as conn:
         cursor = conn.cursor()
@@ -140,10 +140,10 @@ def get_complex_mapping_rules_for_job(
         return [], []
 
     general_rules: list[ComplexMappingRuleItem] = []
-    search_candidates: list[ComplexMappingRuleItem] = []
     for target in sorted(targets):
         general_rules.extend(_fetch_complex_rules(target_table=target, map_kind="GENERAL"))
-        search_candidates.extend(_fetch_complex_rules(target_table=target, map_kind="SEARCH"))
+
+    search_candidates = _fetch_search_complex_rules()
 
     search_rules = _select_search_rules(
         query_sql=job.source_sql,
@@ -164,9 +164,9 @@ def _fetch_complex_rules(target_table: str, map_kind: str) -> list[ComplexMappin
     query = f"""
         SELECT MAP_ID, MAP_KIND, FR_TABLE, FR_COL, TO_TABLE, TO_COL, DESCRIPTION
         FROM {table}
-        WHERE UPPER(TRIM(USE_YN)) = 'Y'
-          AND UPPER(TRIM(MAP_KIND)) = :1
-          AND UPPER(TRIM(FR_TABLE)) = :2
+        WHERE USE_YN = 'Y'
+          AND MAP_KIND = :1
+          AND FR_TABLE = :2
         ORDER BY MAP_ID
     """
 
@@ -174,6 +174,36 @@ def _fetch_complex_rules(target_table: str, map_kind: str) -> list[ComplexMappin
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(query, [map_kind.strip().upper(), target_table])
+        for row in cursor.fetchall():
+            rules.append(
+                ComplexMappingRuleItem(
+                    map_id=int(row[0]),
+                    map_kind=_to_text(row[1]).strip().upper(),
+                    fr_table=_to_text(row[2]),
+                    fr_col=_to_text(row[3]),
+                    to_table=_to_text(row[4]),
+                    to_col=_to_text(row[5]),
+                    description=_to_text(row[6]),
+                )
+            )
+    return rules
+
+
+def _fetch_search_complex_rules() -> list[ComplexMappingRuleItem]:
+    _ensure_complex_map_table_exists()
+    table = _complex_map_table()
+    query = f"""
+        SELECT MAP_ID, MAP_KIND, FR_TABLE, FR_COL, TO_TABLE, TO_COL, DESCRIPTION
+        FROM {table}
+        WHERE USE_YN = 'Y'
+          AND MAP_KIND = 'SEARCH'
+        ORDER BY MAP_ID
+    """
+
+    rules: list[ComplexMappingRuleItem] = []
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(query)
         for row in cursor.fetchall():
             rules.append(
                 ComplexMappingRuleItem(

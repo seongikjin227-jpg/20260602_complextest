@@ -43,6 +43,12 @@ CREATE INDEX IX_NEXT_SQL_COMPLEX_MAP_01
 """
 
 
+SEARCH_INDEX_DDL = """
+CREATE INDEX IX_NEXT_SQL_COMPLEX_MAP_02
+    ON NEXT_SQL_COMPLEX_MAP (USE_YN, MAP_KIND)
+"""
+
+
 TRIGGER_DDL = """
 CREATE OR REPLACE TRIGGER TRG_NEXT_SQL_COMPLEX_MAP_UPD
 BEFORE UPDATE ON NEXT_SQL_COMPLEX_MAP
@@ -96,6 +102,12 @@ def main() -> None:
         else:
             cur.execute(INDEX_DDL)
             print("IX_NEXT_SQL_COMPLEX_MAP_01 created.")
+
+        if index_exists(cur, "IX_NEXT_SQL_COMPLEX_MAP_02"):
+            print("IX_NEXT_SQL_COMPLEX_MAP_02 already exists. Skipping index creation.")
+        else:
+            cur.execute(SEARCH_INDEX_DDL)
+            print("IX_NEXT_SQL_COMPLEX_MAP_02 created.")
 
         cur.execute(TRIGGER_DDL)
         print("TRG_NEXT_SQL_COMPLEX_MAP_UPD created or replaced.")
