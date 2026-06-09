@@ -42,119 +42,192 @@ def _wake_supervisor() -> None:
         pass
 
 
-def _detect_rerun_command(text: str) -> dict | None:
-    """사용자 텍스트에서 재실행 명령을 감지합니다.
+# ── Supervisor Function-Calling 도구 정의 ─────────────────────────────────────
+_SUPERVISOR_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "query_mig_failure_log",
+            "description": (
+                "특정 map_id의 Migration 작업 정보와 NEXT_MIG_LOG 실패 로그를 조회합니다. "
+                "실패 원인 분석 요청 시 사용하세요."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "map_id": {"type": "integer", "description": "조회할 MAP_ID (숫자)"}
+                },
+                "required": ["map_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_sql_failure_log",
+            "description": (
+                "특정 sql_id의 SQL 작업 상태와 NEXT_SQL_INFO.LOG 실패 로그를 조회합니다. "
+                "SQL 변환/튜닝 실패 원인 분석 요청 시 사용하세요."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sql_id":   {"type": "string", "description": "조회할 SQL_ID"},
+                    "space_nm": {"type": "string", "description": "네임스페이스 (선택, 같은 sql_id가 여러 개일 때 구분)"},
+                },
+                "required": ["sql_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "rerun_migration",
+            "description": (
+                "Migration 작업을 즉시 재실행합니다. "
+                "NEXT_MIG_INFO에서 USE_YN='Y', STATUS=NULL, MIG_SQL=NULL, RETRY_COUNT=0으로 초기화하고 "
+                "Supervisor를 즉시 깨워 처리하게 합니다. "
+                "사용자가 재실행을 요청할 때 사용하세요."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "map_id": {"type": "integer", "description": "재실행할 MAP_ID"}
+                },
+                "required": ["map_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "rerun_sql_conversion",
+            "description": (
+                "SQL 변환 작업을 즉시 재실행합니다. "
+                "NEXT_SQL_INFO.STATUS를 'URGENT'로 설정하고 Supervisor를 즉시 깨웁니다. "
+                "사용자가 SQL 변환 재실행을 요청할 때 사용하세요."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sql_id":   {"type": "string", "description": "재실행할 SQL_ID"},
+                    "space_nm": {"type": "string", "description": "네임스페이스 (선택)"},
+                },
+                "required": ["sql_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "rerun_sql_tuning",
+            "description": (
+                "SQL 튜닝 작업을 즉시 재실행합니다. "
+                "NEXT_SQL_INFO.TUNED_TEST를 'URGENT'로 설정하고 Supervisor를 즉시 깨웁니다. "
+                "사용자가 SQL 튜닝 재실행을 요청할 때 사용하세요."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sql_id":   {"type": "string", "description": "재실행할 SQL_ID"},
+                    "space_nm": {"type": "string", "description": "네임스페이스 (선택)"},
+                },
+                "required": ["sql_id"],
+            },
+        },
+    },
+]
 
-    반환 형식:
-      {"type": "mig",      "map_id": 1001}
-      {"type": "sql_conv", "sql_id": "X", "space_nm": "Y"|None}
-      {"type": "sql_tune", "sql_id": "X", "space_nm": "Y"|None}
-      {"type": "sql_fmt",  "sql_id": "X", "space_nm": "Y"|None}
-    """
-    t = text.strip()
 
-    # 공통: space_nm 추출 (선택)
-    sm = re.search(r"space[\s_-]?nm\s*[=:]\s*['\"]?(\w+)['\"]?", t, re.IGNORECASE)
-    space_nm = sm.group(1) if sm else None
+def _handle_supervisor_tool(name: str, args: dict) -> str:
+    """Supervisor 도구 호출을 실행하고 결과를 JSON 문자열로 반환합니다."""
+    try:
+        if name == "query_mig_failure_log":
+            map_id = int(args["map_id"])
+            logs = get_mig_logs(map_id)
+            all_jobs = {int(j["MAP_ID"]): j for j in get_mig_jobs()}
+            job = all_jobs.get(map_id, {})
+            return json.dumps({
+                "map_id": map_id,
+                "job": {
+                    "fr_table":       job.get("FR_TABLE"),
+                    "to_table":       job.get("TO_TABLE"),
+                    "status":         job.get("STATUS"),
+                    "use_yn":         job.get("USE_YN"),
+                    "retry_count":    job.get("RETRY_COUNT"),
+                    "elapsed_sec":    job.get("ELAPSED_SECONDS"),
+                    "mig_sql_head":   str(job.get("MIG_SQL") or "")[:300],
+                },
+                "logs": [
+                    {
+                        "step":    lg.get("STEP_NAME"),
+                        "level":   lg.get("LOG_LEVEL"),
+                        "status":  lg.get("STATUS"),
+                        "message": str(lg.get("MESSAGE") or "")[:400],
+                    }
+                    for lg in logs[-20:]
+                ],
+                "total_log_count": len(logs),
+            }, ensure_ascii=False, default=str)
 
-    # ── Migration ─────────────────────────────────────────────────────────────
-    # "map_id=1001 migration 재실행" | "map_id=1001 재실행"
-    m = re.search(
-        r"map[\s_-]?id\s*[=:]\s*(\d+)[^\n]*?(?:migration|mig|이관)?[^\n]*?(?:재실행|다시\s*실행)",
-        t, re.IGNORECASE,
-    )
-    if m:
-        return {"type": "mig", "map_id": int(m.group(1))}
+        if name == "query_sql_failure_log":
+            sql_id   = args["sql_id"]
+            space_nm = args.get("space_nm")
+            rows = get_sql_failure_log(sql_id, space_nm)
+            return json.dumps({
+                "sql_id": sql_id, "space_nm": space_nm,
+                "rows": [
+                    {
+                        "space_nm":   r.get("SPACE_NM"),
+                        "status":     r.get("STATUS"),
+                        "tuned_test": r.get("TUNED_TEST"),
+                        "log":        str(r.get("LOG") or "")[:500],
+                    }
+                    for r in rows
+                ],
+            }, ensure_ascii=False, default=str)
 
-    # ── SQL 변환 ───────────────────────────────────────────────────────────────
-    # "sql_id=X sql 변환 재실행" | "sql_id=X 변환 재실행"
-    m = re.search(
-        r"sql[\s_-]?id\s*[=:]\s*['\"]?(\w+)['\"]?[^\n]*?(?:sql\s*변환|변환|conversion)[^\n]*?(?:재실행|다시\s*실행)",
-        t, re.IGNORECASE,
-    )
-    if m:
-        return {"type": "sql_conv", "sql_id": m.group(1), "space_nm": space_nm}
+        if name == "rerun_migration":
+            map_id = int(args["map_id"])
+            ok = reset_mig_job_for_rerun(map_id)
+            if ok:
+                _wake_supervisor()
+            return json.dumps({
+                "success": ok,
+                "map_id":  map_id,
+                "action":  "USE_YN='Y', STATUS=NULL, MIG_SQL=NULL, RETRY_COUNT=0 초기화. Supervisor 즉시 알림 완료.",
+            }, ensure_ascii=False)
 
-    # ── SQL 튜닝 ───────────────────────────────────────────────────────────────
-    # "sql_id=X tuning 재실행" | "sql_id=X 튜닝 재실행"
-    m = re.search(
-        r"sql[\s_-]?id\s*[=:]\s*['\"]?(\w+)['\"]?[^\n]*?(?:tuning|튜닝)[^\n]*?(?:재실행|다시\s*실행)",
-        t, re.IGNORECASE,
-    )
-    if m:
-        return {"type": "sql_tune", "sql_id": m.group(1), "space_nm": space_nm}
+        if name == "rerun_sql_conversion":
+            sql_id   = args["sql_id"]
+            space_nm = args.get("space_nm")
+            cnt = reset_sql_conversion_job(sql_id, space_nm)
+            if cnt > 0:
+                _wake_supervisor()
+            return json.dumps({
+                "success":      cnt > 0,
+                "sql_id":       sql_id,
+                "updated_rows": cnt,
+                "action":       f"NEXT_SQL_INFO.STATUS='URGENT' 설정 ({cnt}건). Supervisor 즉시 알림 완료.",
+            }, ensure_ascii=False)
 
-    # ── SQL 포맷팅 ─────────────────────────────────────────────────────────────
-    m = re.search(
-        r"sql[\s_-]?id\s*[=:]\s*['\"]?(\w+)['\"]?[^\n]*?(?:formatting|포맷팅|포맷)[^\n]*?(?:재실행|다시\s*실행)",
-        t, re.IGNORECASE,
-    )
-    if m:
-        return {"type": "sql_fmt", "sql_id": m.group(1), "space_nm": space_nm}
+        if name == "rerun_sql_tuning":
+            sql_id   = args["sql_id"]
+            space_nm = args.get("space_nm")
+            cnt = reset_sql_tuning_job(sql_id, space_nm)
+            if cnt > 0:
+                _wake_supervisor()
+            return json.dumps({
+                "success":      cnt > 0,
+                "sql_id":       sql_id,
+                "updated_rows": cnt,
+                "action":       f"NEXT_SQL_INFO.TUNED_TEST='URGENT' 설정 ({cnt}건). Supervisor 즉시 알림 완료.",
+            }, ensure_ascii=False)
 
-    return None
+        return json.dumps({"error": f"알 수 없는 도구: {name}"})
 
-
-def _execute_rerun(cmd: dict) -> str:
-    """DB 상태를 즉시 초기화하고 결과 메시지를 반환합니다."""
-    t = cmd["type"]
-
-    if t == "mig":
-        map_id = cmd["map_id"]
-        ok = reset_mig_job_for_rerun(map_id)
-        if ok:
-            return (
-                f"**map_id={map_id} Migration 재실행을 시작합니다.**\n\n"
-                f"- `NEXT_MIG_INFO.USE_YN` → `'Y'` 로 초기화\n"
-                f"- `STATUS`, `MIG_SQL`, `RETRY_COUNT` 초기화 완료\n"
-                f"- Supervisor가 즉시 이 작업을 감지하여 처리합니다.\n\n"
-                f"결과는 **Mig Agent Monitor** 에서 확인하세요."
-            )
-        return f"⚠️ map_id={map_id} 를 DB에서 찾을 수 없습니다. MAP_ID를 확인해주세요."
-
-    if t == "sql_conv":
-        sql_id = cmd["sql_id"]
-        space_nm = cmd.get("space_nm")
-        cnt = reset_sql_conversion_job(sql_id, space_nm)
-        qualifier = f"(space_nm={space_nm})" if space_nm else ""
-        if cnt > 0:
-            return (
-                f"**sql_id={sql_id}{qualifier} SQL 변환 재실행을 시작합니다.**\n\n"
-                f"- `NEXT_SQL_INFO.STATUS` → `'URGENT'` 로 설정 ({cnt}건)\n"
-                f"- Supervisor가 즉시 이 작업을 우선 처리합니다.\n\n"
-                f"결과는 **SQL Agent Monitor** 에서 확인하세요."
-            )
-        return f"⚠️ sql_id={sql_id}{qualifier} 를 DB에서 찾을 수 없습니다."
-
-    if t == "sql_tune":
-        sql_id = cmd["sql_id"]
-        space_nm = cmd.get("space_nm")
-        cnt = reset_sql_tuning_job(sql_id, space_nm)
-        qualifier = f"(space_nm={space_nm})" if space_nm else ""
-        if cnt > 0:
-            return (
-                f"**sql_id={sql_id}{qualifier} SQL 튜닝 재실행을 시작합니다.**\n\n"
-                f"- `NEXT_SQL_INFO.TUNED_TEST` → `'URGENT'` 로 설정 ({cnt}건)\n"
-                f"- Supervisor가 즉시 이 작업을 우선 처리합니다.\n\n"
-                f"결과는 **Tuning Agent Monitor** 에서 확인하세요."
-            )
-        return f"⚠️ sql_id={sql_id}{qualifier} 를 DB에서 찾을 수 없습니다."
-
-    if t == "sql_fmt":
-        sql_id = cmd["sql_id"]
-        space_nm = cmd.get("space_nm")
-        cnt = reset_sql_tuning_job(sql_id, space_nm)   # formatting도 TUNED_TEST 기준으로 재기동
-        qualifier = f"(space_nm={space_nm})" if space_nm else ""
-        if cnt > 0:
-            return (
-                f"**sql_id={sql_id}{qualifier} SQL 포맷팅 재실행을 시작합니다.**\n\n"
-                f"- `NEXT_SQL_INFO.TUNED_TEST` → `'URGENT'` 로 설정 ({cnt}건)\n"
-                f"- Supervisor가 즉시 이 작업을 처리합니다.\n\n"
-                f"결과는 **SQL Agent Monitor** 에서 확인하세요."
-            )
-        return f"⚠️ sql_id={sql_id}{qualifier} 를 DB에서 찾을 수 없습니다."
-
-    return "⚠️ 알 수 없는 재실행 유형입니다."
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
 CSS = """
@@ -292,13 +365,18 @@ def _system_prompt(supervisor_mode: bool = False) -> str:
             "사용자의 질문에 한국어로 전문적이고 구체적으로 답변하세요.",
             "",
             "당신의 역할:",
-            "1. 실패한 작업의 원인을 DB 로그와 상태 데이터를 기반으로 분석합니다.",
-            "2. 사용자가 특정 map_id/row_id를 재실행 요청하면, 그 방법을 안내하고 재실행을 확인합니다.",
-            "3. 재실행 가능한 명령 형식을 안내할 때는 아래 예시를 참고합니다:",
-            "   - Migration 재실행: 'map_id=X migration 재실행해줘'",
-            "   - SQL 변환 재실행: 'row_id=X sql 변환 재실행해줘'",
-            "   - SQL 튜닝 재실행: 'row_id=X tuning 재실행해줘'",
-            "   - SQL 포맷팅 재실행: 'row_id=X formatting 재실행해줘'",
+            "1. 사용자가 특정 map_id의 실패 원인을 물어보면 query_mig_failure_log 도구를 호출하여",
+            "   로그를 조회한 뒤 원인을 한국어로 분석·요약합니다.",
+            "2. 사용자가 sql_id의 실패 원인을 물어보면 query_sql_failure_log 도구를 호출합니다.",
+            "3. 사용자가 재실행을 요청하면 즉시 해당 rerun 도구를 호출하여 DB 상태를 변경하고",
+            "   Supervisor를 깨웁니다. 사용자에게 확인 메시지를 묻지 않고 바로 실행합니다.",
+            "4. 정보 조회와 재실행을 조합할 수 있습니다 (예: 실패 원인 확인 후 재실행).",
+            "",
+            "도구 선택 기준:",
+            "- '왜 실패했어?', '실패 원인', '로그 보여줘' → query_mig_failure_log 또는 query_sql_failure_log",
+            "- '재실행해줘', '다시 돌려줘', '다시 실행' + migration/이관 → rerun_migration",
+            "- '재실행해줘', '다시 돌려줘' + sql 변환/conversion → rerun_sql_conversion",
+            "- '재실행해줘', '다시 돌려줘' + sql 튜닝/tuning → rerun_sql_tuning",
             "",
             f"[현재 시각: {now}]",
             "",
@@ -381,7 +459,55 @@ def _fetch_sql_context(sql_pairs: list[tuple[str, str | None]]) -> str:
     return "\n".join(lines)
 
 
+def _call_llm_supervisor(chat_messages: list[dict]) -> str:
+    """Supervisor 모드 전용 LLM 호출: function calling 루프로 도구를 자율 실행합니다."""
+    api_key  = os.getenv("OPEN_API_KEY") or os.getenv("LLM_API_KEY", "")
+    base_url = os.getenv("LLM_BASE_URL",  "")
+    model    = os.getenv("LLM_MODEL", "GLM-5.1")
+    client   = OpenAI(api_key=api_key, base_url=base_url)
+
+    system = _system_prompt(supervisor_mode=True)
+    messages: list[dict] = [{"role": "system", "content": system}] + list(chat_messages)
+
+    for _ in range(5):  # 최대 5 라운드 (도구 연쇄 호출 대비)
+        resp = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            tools=_SUPERVISOR_TOOLS,
+            tool_choice="auto",
+            temperature=0.5,
+            max_tokens=1500,
+        )
+        msg = resp.choices[0].message
+
+        # 도구 호출이 없으면 최종 답변
+        if not msg.tool_calls:
+            return (msg.content or "").strip()
+
+        # assistant 메시지를 히스토리에 추가
+        messages.append(msg.model_dump(exclude_unset=True))
+
+        # 각 도구 호출 실행 후 결과를 히스토리에 추가
+        for tc in msg.tool_calls:
+            try:
+                args = json.loads(tc.function.arguments or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            tool_result = _handle_supervisor_tool(tc.function.name, args)
+            messages.append({
+                "role":         "tool",
+                "tool_call_id": tc.id,
+                "content":      tool_result,
+            })
+
+    # 5 라운드 소진 시 마지막 응답 반환
+    return (msg.content or "도구 처리 완료. 결과를 확인하세요.").strip()
+
+
 def _call_llm(chat_messages: list[dict], supervisor_mode: bool = False) -> str:
+    if supervisor_mode:
+        return _call_llm_supervisor(chat_messages)
+
     api_key  = os.getenv("OPEN_API_KEY") or os.getenv("LLM_API_KEY", "")
     base_url = os.getenv("LLM_BASE_URL",  "")
     model    = os.getenv("LLM_MODEL", "GLM-5.1")
@@ -395,11 +521,11 @@ def _call_llm(chat_messages: list[dict], supervisor_mode: bool = False) -> str:
     map_ids = _extract_map_ids(last_user)
     extra   = _fetch_map_context(map_ids) if map_ids else ""
 
-    # SQL_ID 감지 → SQL 실패 로그 컨텍스트 (Supervisor 모드 또는 일반 모드 모두)
+    # SQL_ID 감지 → SQL 실패 로그 컨텍스트
     sql_pairs = _extract_sql_ids(last_user)
     extra += _fetch_sql_context(sql_pairs)
 
-    system  = _system_prompt(supervisor_mode=supervisor_mode) + extra
+    system  = _system_prompt(supervisor_mode=False) + extra
 
     full_messages = [{"role": "system", "content": system}] + chat_messages
     resp = client.chat.completions.create(
@@ -769,21 +895,7 @@ def render():
     if user_input and user_input.strip():
         user_text = user_input.strip()
 
-        # Supervisor 모드: 재실행 명령 감지 → DB 즉시 초기화 + Supervisor 깨우기
-        if supervisor_mode:
-            rerun_cmd = _detect_rerun_command(user_text)
-            if rerun_cmd:
-                confirm_msg = _execute_rerun(rerun_cmd)
-                _wake_supervisor()
-                chat["messages"].append({"role": "user", "content": user_text})
-                chat["messages"].append({"role": "assistant", "content": confirm_msg})
-                if chat["title"] == "새 대화":
-                    chat["title"] = user_text[:24]
-                _save_chat(chat)
-                st.session_state.current_chat = chat
-                st.rerun()
-
-        # 유저 메시지 추가 후 LLM 응답 요청
+        # 유저 메시지 추가 후 LLM 응답 요청 (Supervisor 모드에서는 LLM이 직접 도구 판단)
         chat["messages"].append({"role": "user", "content": user_text})
         if chat["title"] == "새 대화":
             chat["title"] = user_text[:24]
