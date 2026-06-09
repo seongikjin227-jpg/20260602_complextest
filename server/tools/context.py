@@ -2,13 +2,30 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from datetime import datetime
+from pathlib import Path
 
 from server.repositories.supervisor.metrics_repository import (
     build_metric_row,
     insert_agent_run_metrics,
 )
+
+# ── 정지 / 일시정지 제어 ────────────────────────────────────────────────────────
+_stop_event = threading.Event()
+PAUSE_FLAG = Path(__file__).resolve().parent.parent.parent / "runtime" / "agent.pause"
+
+
+def is_stop_requested() -> bool:
+    """SIGINT/SIGTERM 수신 여부를 반환합니다."""
+    return _stop_event.is_set()
+
+
+def request_stop() -> None:
+    """외부에서 정지 신호를 보냅니다 (SIGINT 핸들러에서 호출)."""
+    _stop_event.set()
+
 
 # ── 공유 상태 (Supervisor의 poll_node가 매 사이클마다 갱신) ────────────────────
 mig_registry: dict = {}

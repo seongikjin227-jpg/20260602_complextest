@@ -16,10 +16,80 @@ from utils.db import (
     get_mig_jobs,
     get_mig_logs,
 )
+from utils.env_manager import read_env
 
 _ROOT      = Path(__file__).resolve().parent.parent.parent
 load_dotenv(_ROOT / ".env")
-_CHATS_DIR = _ROOT / "runtime" / "chats"
+_CHATS_DIR    = _ROOT / "runtime" / "chats"
+_COMMAND_FILE = _ROOT / "runtime" / "chat_command.json"
+
+
+def _is_supervisor_mode() -> bool:
+    env = read_env()
+    return env.get("SUPERVISOR_MODE", "false").lower() == "true"
+
+
+def _write_chat_command(command: str, one_shot: bool = True) -> None:
+    """supervisor agent에게 1회성 명령을 전달합니다."""
+    _COMMAND_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _COMMAND_FILE.write_text(
+        json.dumps({"command": command, "one_shot": one_shot}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def _detect_rerun_command(text: str) -> tuple[str | None, str | None]:
+    """사용자 텍스트에서 재실행 명령을 감지합니다.
+    Returns: (supervisor_command, user_feedback_msg) or (None, None)
+    """
+    t = text.strip()
+
+    # map_id + migration 재실행
+    m = re.search(
+        r"map[\s_-]?id\s*[=:]\s*(\d+)[^,\n]*?(migration|mig|이관)\s*(?:재실행|다시\s*실행|실행)",
+        t, re.IGNORECASE,
+    )
+    if m:
+        mid = m.group(1)
+        return f"map_id={mid} 실행", f"map_id={mid} Migration 재실행 명령을 Supervisor에 전달했습니다."
+
+    # map_id만 언급 + 재실행 키워드
+    m = re.search(
+        r"map[\s_-]?id\s*[=:]\s*(\d+)[^,\n]*?(?:재실행|다시\s*실행)",
+        t, re.IGNORECASE,
+    )
+    if m:
+        mid = m.group(1)
+        return f"map_id={mid} 실행", f"map_id={mid} Migration 재실행 명령을 Supervisor에 전달했습니다."
+
+    # row_id + sql/변환 재실행
+    m = re.search(
+        r"row[\s_-]?id\s*[=:]\s*(\S+?)[^,\n]*?(?:sql|변환|sql\s*변환)\s*(?:재실행|다시\s*실행|실행)",
+        t, re.IGNORECASE,
+    )
+    if m:
+        rid = m.group(1).rstrip(".,")
+        return f"row_id={rid} sql 실행", f"row_id={rid} SQL 변환 재실행 명령을 Supervisor에 전달했습니다."
+
+    # row_id + tuning 재실행
+    m = re.search(
+        r"row[\s_-]?id\s*[=:]\s*(\S+?)[^,\n]*?(?:tuning|튜닝)\s*(?:재실행|다시\s*실행|실행)",
+        t, re.IGNORECASE,
+    )
+    if m:
+        rid = m.group(1).rstrip(".,")
+        return f"row_id={rid} tuning 실행", f"row_id={rid} SQL 튜닝 재실행 명령을 Supervisor에 전달했습니다."
+
+    # row_id + formatting 재실행
+    m = re.search(
+        r"row[\s_-]?id\s*[=:]\s*(\S+?)[^,\n]*?(?:formatting|포맷팅|포맷)\s*(?:재실행|다시\s*실행|실행)",
+        t, re.IGNORECASE,
+    )
+    if m:
+        rid = m.group(1).rstrip(".,")
+        return f"row_id={rid} formatting 실행", f"row_id={rid} SQL 포맷팅 재실행 명령을 Supervisor에 전달했습니다."
+
+    return None, None
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
 CSS = """
@@ -148,17 +218,38 @@ def _fetch_map_context(map_ids: list[int]) -> str:
     return "\n".join(lines)
 
 # ── LLM ───────────────────────────────────────────────────────────────────────
-def _system_prompt() -> str:
+def _system_prompt(supervisor_mode: bool = False) -> str:
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    lines = [
-        "당신은 Oracle 데이터 마이그레이션 파이프라인의 운영 어시스턴트입니다.",
-        "사용자의 질문에 한국어로 친절하고 간결하게 답변하세요.",
-        "숫자나 상태를 물어보면 아래 실시간 DB 데이터를 기반으로 정확히 답변하세요.",
-        "",
-        f"[현재 시각: {now}]",
-        "",
-        "[에이전트별 현황]",
-    ]
+
+    if supervisor_mode:
+        lines = [
+            "당신은 Oracle 데이터 마이그레이션 파이프라인의 **Supervisor AI 어시스턴트**입니다.",
+            "사용자의 질문에 한국어로 전문적이고 구체적으로 답변하세요.",
+            "",
+            "당신의 역할:",
+            "1. 실패한 작업의 원인을 DB 로그와 상태 데이터를 기반으로 분석합니다.",
+            "2. 사용자가 특정 map_id/row_id를 재실행 요청하면, 그 방법을 안내하고 재실행을 확인합니다.",
+            "3. 재실행 가능한 명령 형식을 안내할 때는 아래 예시를 참고합니다:",
+            "   - Migration 재실행: 'map_id=X migration 재실행해줘'",
+            "   - SQL 변환 재실행: 'row_id=X sql 변환 재실행해줘'",
+            "   - SQL 튜닝 재실행: 'row_id=X tuning 재실행해줘'",
+            "   - SQL 포맷팅 재실행: 'row_id=X formatting 재실행해줘'",
+            "",
+            f"[현재 시각: {now}]",
+            "",
+            "[에이전트별 현황]",
+        ]
+    else:
+        lines = [
+            "당신은 Oracle 데이터 마이그레이션 파이프라인의 운영 어시스턴트입니다.",
+            "사용자의 질문에 한국어로 친절하고 간결하게 답변하세요.",
+            "숫자나 상태를 물어보면 아래 실시간 DB 데이터를 기반으로 정확히 답변하세요.",
+            "",
+            f"[현재 시각: {now}]",
+            "",
+            "[에이전트별 현황]",
+        ]
+
     for label, fn in [
         ("Mig Agent",    get_mig_status_summary),
         ("SQL Agent",    get_sql_status_summary),
@@ -171,8 +262,10 @@ def _system_prompt() -> str:
         except Exception:
             lines.append(f"- {label}: 조회 실패")
 
+    # Supervisor 모드에서는 실패 작업을 더 많이, 더 상세히 포함
+    max_fails = 20 if supervisor_mode else 5
     try:
-        fails = get_recent_fails(5)
+        fails = get_recent_fails(max_fails)
         lines.append("")
         if fails:
             lines.append("[최근 실패 작업]")
@@ -183,9 +276,16 @@ def _system_prompt() -> str:
     except Exception:
         pass
 
+    if supervisor_mode:
+        lines.append("")
+        lines.append("[Supervisor 모드 안내]")
+        lines.append("사용자가 재실행을 요청하면 명확하게 확인 메시지를 출력하세요.")
+        lines.append("재실행 명령이 Supervisor에 전달되었음을 사용자에게 알려주세요.")
+
     return "\n".join(lines)
 
-def _call_llm(chat_messages: list[dict]) -> str:
+
+def _call_llm(chat_messages: list[dict], supervisor_mode: bool = False) -> str:
     api_key  = os.getenv("OPEN_API_KEY") or os.getenv("LLM_API_KEY", "")
     base_url = os.getenv("LLM_BASE_URL",  "")
     model    = os.getenv("LLM_MODEL", "GLM-5.1")
@@ -197,7 +297,7 @@ def _call_llm(chat_messages: list[dict]) -> str:
     )
     map_ids = _extract_map_ids(last_user)
     extra   = _fetch_map_context(map_ids) if map_ids else ""
-    system  = _system_prompt() + extra
+    system  = _system_prompt(supervisor_mode=supervisor_mode) + extra
 
     full_messages = [{"role": "system", "content": system}] + chat_messages
     resp = client.chat.completions.create(
@@ -261,7 +361,6 @@ def _dashboard_status(status, title: str = "") -> str | None:
 def _rate_values(title: str, normalized: dict[str, int]) -> tuple[int, int, int, int]:
     pass_count = normalized.get("PASS", 0)
     pass_non_select_count = normalized.get("PASS (non-select)", 0)
-    skip_count = normalized.get("SKIP", 0)
     fail_count = normalized.get("FAIL", 0)
 
     if _is_tuning_title(title):
@@ -399,6 +498,8 @@ def render():
     st.markdown(CSS, unsafe_allow_html=True)
 
     # ── 세션 초기화 ──────────────────────────────────────────────────────────
+    supervisor_mode = _is_supervisor_mode()
+
     if "current_chat" not in st.session_state:
         st.session_state.current_chat = _new_chat()
     if "chat_refresh" not in st.session_state:
@@ -407,6 +508,10 @@ def render():
         st.session_state.chat_pending_response = False
     if "chat_pending_id" not in st.session_state:
         st.session_state.chat_pending_id = None
+    if "chat_pending_supervisor_mode" not in st.session_state:
+        st.session_state.chat_pending_supervisor_mode = False
+    if "supervisor_command_sent" not in st.session_state:
+        st.session_state.supervisor_command_sent = None
 
     chat = st.session_state.current_chat
 
@@ -452,22 +557,48 @@ def render():
     # 가운데: 채팅
     # ════════════════════════════════════════════════════════════
     with center:
-        st.markdown(f"#### 🤖 Migration 어시스턴트")
-        st.caption("파이프라인 상태, 실패 원인, 작업 현황 등 무엇이든 물어보세요.")
+        if supervisor_mode:
+            st.markdown("#### 🤖 Supervisor 어시스턴트")
+            st.markdown(
+                '<span style="background:#fef3c7;color:#92400e;padding:3px 10px;'
+                'border-radius:12px;font-size:12px;font-weight:700;">🤖 SUPERVISOR MODE</span>',
+                unsafe_allow_html=True,
+            )
+            st.caption("실패 원인 분석, 특정 map_id/row_id 재실행 요청이 가능합니다.")
+        else:
+            st.markdown("#### 🤖 Migration 어시스턴트")
+            st.caption("파이프라인 상태, 실패 원인, 작업 현황 등 무엇이든 물어보세요.")
+
+        # 재실행 명령 전송 완료 알림
+        if st.session_state.supervisor_command_sent:
+            st.success(st.session_state.supervisor_command_sent)
+            st.session_state.supervisor_command_sent = None
 
         # 메시지 표시
-        msg_container = st.container(height=660)
+        msg_container = st.container(height=640)
         with msg_container:
             if not chat["messages"]:
-                st.markdown("""
-                <div style="text-align:center;color:#9ca3af;padding:80px 0 40px 0">
-                    <div style="font-size:40px">💬</div>
-                    <div style="font-size:15px;margin-top:12px">아래에서 질문을 입력해보세요</div>
-                    <div style="font-size:12px;margin-top:8px;color:#d1d5db">
-                        예: "현재 실패한 작업은 몇 개야?" · "PASS된 이관 테이블 목록 보여줘"
+                if supervisor_mode:
+                    st.markdown("""
+                    <div style="text-align:center;color:#9ca3af;padding:60px 0 30px 0">
+                        <div style="font-size:40px">🤖</div>
+                        <div style="font-size:15px;margin-top:12px">Supervisor 모드가 활성화되었습니다</div>
+                        <div style="font-size:12px;margin-top:8px;color:#d1d5db">
+                            예: "map_id=5 실패 원인이 뭐야?" · "map_id=5 migration 재실행해줘"<br>
+                            예: "row_id=ABC sql 변환 재실행해줘" · "최근 FAIL 원인 분석해줘"
+                        </div>
                     </div>
-                </div>
-                """, unsafe_allow_html=True)
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown("""
+                    <div style="text-align:center;color:#9ca3af;padding:80px 0 40px 0">
+                        <div style="font-size:40px">💬</div>
+                        <div style="font-size:15px;margin-top:12px">아래에서 질문을 입력해보세요</div>
+                        <div style="font-size:12px;margin-top:8px;color:#d1d5db">
+                            예: "현재 실패한 작업은 몇 개야?" · "PASS된 이관 테이블 목록 보여줘"
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
             for msg in chat["messages"]:
                 with st.chat_message(msg["role"]):
                     st.markdown(msg["content"])
@@ -479,7 +610,8 @@ def render():
                     placeholder = st.empty()
                     placeholder.markdown("입력중...")
                     try:
-                        answer = _call_llm(chat["messages"])
+                        pending_sv_mode = st.session_state.get("chat_pending_supervisor_mode", False)
+                        answer = _call_llm(chat["messages"], supervisor_mode=pending_sv_mode)
                     except Exception as e:
                         answer = f"⚠️ LLM 호출 실패: {e}"
                     placeholder.markdown(answer)
@@ -488,10 +620,16 @@ def render():
                 st.session_state.current_chat = chat
                 st.session_state.chat_pending_response = False
                 st.session_state.chat_pending_id = None
+                st.session_state.chat_pending_supervisor_mode = False
                 st.rerun()
 
         # 입력
-        user_input = st.chat_input("메시지를 입력하세요...", key="chat_input")
+        placeholder_text = (
+            "실패 원인 분석 또는 재실행 요청을 입력하세요... (예: map_id=5 재실행해줘)"
+            if supervisor_mode
+            else "메시지를 입력하세요..."
+        )
+        user_input = st.chat_input(placeholder_text, key="chat_input")
 
     # ════════════════════════════════════════════════════════════
     # 오른쪽: 에이전트 상태
@@ -527,13 +665,39 @@ def render():
 
     # ── 메시지 처리 (컬럼 밖에서) ─────────────────────────────────────────────
     if user_input and user_input.strip():
-        # 유저 메시지 추가
-        chat["messages"].append({"role": "user", "content": user_input.strip()})
+        user_text = user_input.strip()
+
+        # Supervisor 모드: 재실행 명령 감지 → chat_command.json 작성
+        if supervisor_mode:
+            sv_cmd, sv_feedback = _detect_rerun_command(user_text)
+            if sv_cmd:
+                try:
+                    _write_chat_command(sv_cmd, one_shot=True)
+                    st.session_state.supervisor_command_sent = f"✅ {sv_feedback}"
+                except Exception as e:
+                    st.session_state.supervisor_command_sent = f"⚠️ 명령 전달 실패: {e}"
+                # 재실행 확인 메시지를 어시스턴트 답변으로 추가
+                chat["messages"].append({"role": "user", "content": user_text})
+                confirm_msg = (
+                    f"네, **{sv_feedback}**\n\n"
+                    f"Supervisor 에이전트가 다음 사이클에 해당 작업을 처리합니다.\n"
+                    f"실행 명령: `{sv_cmd}`"
+                )
+                chat["messages"].append({"role": "assistant", "content": confirm_msg})
+                if chat["title"] == "새 대화":
+                    chat["title"] = user_text[:24]
+                _save_chat(chat)
+                st.session_state.current_chat = chat
+                st.rerun()
+
+        # 유저 메시지 추가 후 LLM 응답 요청
+        chat["messages"].append({"role": "user", "content": user_text})
         if chat["title"] == "새 대화":
-            chat["title"] = user_input.strip()[:24]
+            chat["title"] = user_text[:24]
 
         _save_chat(chat)
         st.session_state.current_chat = chat
         st.session_state.chat_pending_response = True
         st.session_state.chat_pending_id = chat["id"]
+        st.session_state.chat_pending_supervisor_mode = supervisor_mode
         st.rerun()
