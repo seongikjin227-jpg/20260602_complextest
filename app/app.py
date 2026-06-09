@@ -73,7 +73,7 @@ with st.sidebar:
     new_sql_only = st.toggle("SQL Conversion", value=sql_only)
     new_tuning_only = st.toggle("SQL Tuning", value=tuning_only)
     new_formatting_only = st.toggle("SQL Formatting", value=formatting_only)
-    new_supervisor_mode = st.toggle("🤖 Supervisor", value=supervisor_mode, help="Supervisor 모드: AI가 실패 원인 분석 및 특정 작업 재실행을 지원합니다.")
+    new_supervisor_mode = st.toggle("Supervisor", value=supervisor_mode, help="Supervisor 모드: AI가 실패 원인 분석 및 특정 작업 재실행을 지원합니다.")
 
     if (new_db_only, new_sql_only, new_tuning_only, new_formatting_only, new_supervisor_mode) != (
         db_only,

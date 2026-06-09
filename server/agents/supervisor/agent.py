@@ -165,6 +165,8 @@ class SupervisorAgent:
                     os.write(2, msg.encode("utf-8", errors="ignore"))
                 except OSError:
                     pass
+                # Raise KeyboardInterrupt so blocking LLM/tool calls are interrupted immediately.
+                raise KeyboardInterrupt
             else:
                 os._exit(130)
 

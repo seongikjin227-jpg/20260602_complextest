@@ -8,6 +8,7 @@ from langchain_core.tools import tool
 
 from server.tools.context import (
     PAUSE_FLAG,
+    WAKE_FLAG,
     _stop_event,
     callbacks,
     finish_cycle_metrics,
@@ -54,6 +55,11 @@ def request_wait(seconds: int) -> str:
             return f"정지 신호 수신. {elapsed:.1f}초 대기 후 중단."
         if PAUSE_FLAG.exists():
             break
+        if WAKE_FLAG.exists():
+            WAKE_FLAG.unlink(missing_ok=True)
+            if logger:
+                logger.info("[request_wait] 즉시 실행 신호 수신. 대기 중단.")
+            return "즉시 실행 신호 수신. 다음 사이클을 바로 시작합니다."
         time.sleep(_WAIT_STEP)
         elapsed += _WAIT_STEP
 

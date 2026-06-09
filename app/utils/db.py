@@ -505,6 +505,120 @@ def get_recent_sql_stage_logs(limit: int = 100) -> list[dict]:
         return []
 
 
+# ── Re-run / 재실행 DB 초기화 ────────────────────────────────────────────────
+
+def reset_mig_job_for_rerun(map_id: int) -> bool:
+    """Migration 작업을 재실행 가능 상태로 초기화합니다 (USE_YN='Y', STATUS/MIG_SQL 초기화)."""
+    q = f"""
+        UPDATE {MIG_TABLE}
+        SET USE_YN = 'Y',
+            STATUS = NULL,
+            RETRY_COUNT = 0,
+            MIG_SQL = NULL,
+            UPD_TS = CURRENT_TIMESTAMP
+        WHERE MAP_ID = :1
+    """
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(q, (int(map_id),))
+            rowcount = cur.rowcount
+            conn.commit()
+            return rowcount > 0
+    except Exception:
+        return False
+
+
+def reset_sql_conversion_job(sql_id: str, space_nm: str | None = None) -> int:
+    """SQL 변환 작업을 URGENT 상태로 재설정합니다. 업데이트된 행 수를 반환합니다."""
+    if space_nm:
+        q = f"""
+            UPDATE {SQL_TABLE}
+            SET STATUS = 'URGENT',
+                UPD_TS = CURRENT_TIMESTAMP
+            WHERE TO_CHAR(SQL_ID) = :1
+              AND TO_CHAR(SPACE_NM) = :2
+        """
+        params = (sql_id, space_nm)
+    else:
+        q = f"""
+            UPDATE {SQL_TABLE}
+            SET STATUS = 'URGENT',
+                UPD_TS = CURRENT_TIMESTAMP
+            WHERE TO_CHAR(SQL_ID) = :1
+        """
+        params = (sql_id,)
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(q, params)
+            rowcount = cur.rowcount
+            conn.commit()
+            return rowcount
+    except Exception:
+        return 0
+
+
+def reset_sql_tuning_job(sql_id: str, space_nm: str | None = None) -> int:
+    """SQL 튜닝 작업을 URGENT 상태로 재설정합니다. 업데이트된 행 수를 반환합니다."""
+    if space_nm:
+        q = f"""
+            UPDATE {SQL_TABLE}
+            SET TUNED_TEST = 'URGENT',
+                UPD_TS = CURRENT_TIMESTAMP
+            WHERE TO_CHAR(SQL_ID) = :1
+              AND TO_CHAR(SPACE_NM) = :2
+        """
+        params = (sql_id, space_nm)
+    else:
+        q = f"""
+            UPDATE {SQL_TABLE}
+            SET TUNED_TEST = 'URGENT',
+                UPD_TS = CURRENT_TIMESTAMP
+            WHERE TO_CHAR(SQL_ID) = :1
+        """
+        params = (sql_id,)
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(q, params)
+            rowcount = cur.rowcount
+            conn.commit()
+            return rowcount
+    except Exception:
+        return 0
+
+
+# ── 실패 로그 조회 ─────────────────────────────────────────────────────────────
+
+def get_sql_failure_log(sql_id: str, space_nm: str | None = None) -> list[dict]:
+    """NEXT_SQL_INFO의 LOG 컬럼을 통해 SQL 작업 실패 로그를 조회합니다."""
+    if space_nm:
+        q = f"""
+            SELECT TO_CHAR(SQL_ID) AS SQL_ID, TO_CHAR(SPACE_NM) AS SPACE_NM,
+                   TO_CHAR(STATUS) AS STATUS, TO_CHAR(TUNED_TEST) AS TUNED_TEST, LOG
+            FROM {SQL_TABLE}
+            WHERE TO_CHAR(SQL_ID) = :1
+              AND TO_CHAR(SPACE_NM) = :2
+        """
+        params = (sql_id, space_nm)
+    else:
+        q = f"""
+            SELECT TO_CHAR(SQL_ID) AS SQL_ID, TO_CHAR(SPACE_NM) AS SPACE_NM,
+                   TO_CHAR(STATUS) AS STATUS, TO_CHAR(TUNED_TEST) AS TUNED_TEST, LOG
+            FROM {SQL_TABLE}
+            WHERE TO_CHAR(SQL_ID) = :1
+        """
+        params = (sql_id,)
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(q, params)
+            return _to_dicts(cur)
+    except Exception:
+        return []
+
+
 def get_sql_job_full(row_id: str) -> dict | None:
     q = f"""
         SELECT ROWIDTOCHAR(ROWID) AS ROW_ID,

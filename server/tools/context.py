@@ -15,6 +15,7 @@ from server.repositories.supervisor.metrics_repository import (
 # ── 정지 / 일시정지 제어 ────────────────────────────────────────────────────────
 _stop_event = threading.Event()
 PAUSE_FLAG = Path(__file__).resolve().parent.parent.parent / "runtime" / "agent.pause"
+WAKE_FLAG  = Path(__file__).resolve().parent.parent.parent / "runtime" / "agent.wake"
 
 
 def is_stop_requested() -> bool:
