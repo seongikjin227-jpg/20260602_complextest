@@ -286,10 +286,14 @@ def get_tuning_jobs() -> list:
 
 
 def get_formatting_jobs() -> list[SqlInfoJob]:
-    """Return tuned rows that still need FORMATTED_SQL generation."""
+    """Return tuned rows explicitly requested for FORMATTED_SQL regeneration."""
     table = get_result_table()
     available_columns = _get_available_columns(table)
-    if "FORMATTED_SQL" not in available_columns or "TUNED_TEST" not in available_columns:
+    if (
+        "FORMATTED_SQL" not in available_columns
+        or "TUNED_TEST" not in available_columns
+        or "FORMATTING_RETRY_YN" not in available_columns
+    ):
         return []
 
     select_correct_cols = ", ".join(
@@ -312,10 +316,7 @@ def get_formatting_jobs() -> list[SqlInfoJob]:
                UPD_TS, EDITED_YN, {fr_bindtuned_sql_column}, {select_correct_cols}, {sql_length_column}, {map_type_column}, FORMATTED_SQL, {tuned_result_column}
         FROM {table}
         WHERE UPPER(TRIM(TUNED_TEST)) IN ('PASS', 'PASS_NON_SELECT')
-          AND (
-              FORMATTED_SQL IS NULL
-              OR DBMS_LOB.GETLENGTH(FORMATTED_SQL) = 0
-          )
+          AND UPPER(TRIM(FORMATTING_RETRY_YN)) = 'Y'
           {batch_limit_clause}
         ORDER BY
           UPD_TS NULLS FIRST,
@@ -508,17 +509,29 @@ def update_formatted_sql(row_id: str, formatted_sql: str) -> None:
 
     payload = _fit_payload_to_column_limits(
         table=table,
-        values={"FORMATTED_SQL": formatted_sql},
+        values={
+            "FORMATTED_SQL": formatted_sql,
+            "FORMATTING_RETRY_YN": "N" if "FORMATTING_RETRY_YN" in available_columns else None,
+        },
     )
+    set_clauses = ["FORMATTED_SQL = :1"]
+    params = [payload["FORMATTED_SQL"]]
+    next_index = 2
+    if "FORMATTING_RETRY_YN" in available_columns:
+        set_clauses.append(f"FORMATTING_RETRY_YN = :{next_index}")
+        params.append(payload["FORMATTING_RETRY_YN"])
+        next_index += 1
+    set_clauses.append("UPD_TS = CURRENT_TIMESTAMP")
+    set_clause = ",\n            ".join(set_clauses)
     query = f"""
         UPDATE {table}
-        SET FORMATTED_SQL = :1,
-            UPD_TS = CURRENT_TIMESTAMP
-        WHERE ROWID = CHARTOROWID(:2)
+        SET {set_clause}
+        WHERE ROWID = CHARTOROWID(:{next_index})
     """
+    params.append(row_id)
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(query, [payload["FORMATTED_SQL"], row_id])
+        cursor.execute(query, params)
         conn.commit()
 
 

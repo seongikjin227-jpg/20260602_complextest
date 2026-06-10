@@ -672,7 +672,7 @@ def _call_llm_supervisor(chat_messages: list[dict]) -> str:
             tools=_SUPERVISOR_TOOLS,
             tool_choice="auto",
             temperature=0.5,
-            max_tokens=1500,
+            max_tokens=5000,
         )
         msg = resp.choices[0].message
 
@@ -725,7 +725,7 @@ def _call_llm(chat_messages: list[dict], supervisor_mode: bool = False) -> str:
 
     full_messages = [{"role": "system", "content": system}] + chat_messages
     resp = client.chat.completions.create(
-        model=model, messages=full_messages, temperature=0.7, max_tokens=1500
+        model=model, messages=full_messages, temperature=0.7, max_tokens=5000
     )
     return resp.choices[0].message.content.strip()
 
@@ -999,7 +999,7 @@ def render():
             st.session_state.supervisor_command_sent = None
 
         # 메시지 표시
-        msg_container = st.container(height=640)
+        msg_container = st.container(height=720)
         with msg_container:
             if not chat["messages"]:
                 if supervisor_mode:
