@@ -1,4 +1,5 @@
 import os
+import time
 import oracledb
 from pathlib import Path
 from dotenv import load_dotenv
@@ -617,6 +618,164 @@ def get_sql_failure_log(sql_id: str, space_nm: str | None = None) -> list[dict]:
             return _to_dicts(cur)
     except Exception:
         return []
+
+
+def get_sql_conversion_failure_analysis_rows(limit: int = 200) -> list[dict]:
+    """Return recent SQL conversion FAIL rows for supervisor aggregate analysis."""
+    available_columns = _get_available_columns(SQL_TABLE)
+    map_kind_column = "TO_CHAR(MAP_KIND) AS MAP_KIND" if "MAP_KIND" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS MAP_KIND"
+    map_type_column = "TO_CHAR(MAP_TYPE) AS MAP_TYPE" if "MAP_TYPE" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS MAP_TYPE"
+    tag_kind_column = "TO_CHAR(TAG_KIND) AS TAG_KIND" if "TAG_KIND" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS TAG_KIND"
+    sql_length_column = "SQL_LENGTH" if "SQL_LENGTH" in available_columns else "CAST(NULL AS NUMBER)"
+    edit_len_expr = "DBMS_LOB.GETLENGTH(EDIT_FR_SQL)" if "EDIT_FR_SQL" in available_columns else "0"
+
+    q = f"""
+        SELECT *
+        FROM (
+            SELECT TO_CHAR(SQL_ID) AS SQL_ID,
+                   TO_CHAR(SPACE_NM) AS SPACE_NM,
+                   {map_kind_column},
+                   {tag_kind_column},
+                   {map_type_column},
+                   {sql_length_column} AS SQL_LENGTH,
+                   DBMS_LOB.GETLENGTH(FR_SQL_TEXT) AS FR_SQL_LEN,
+                   {edit_len_expr} AS EDIT_FR_SQL_LEN,
+                   CASE
+                       WHEN NVL({edit_len_expr}, 0) > 0
+                       THEN {edit_len_expr}
+                       ELSE DBMS_LOB.GETLENGTH(FR_SQL_TEXT)
+                   END AS EFFECTIVE_SQL_LEN,
+                   TO_CHAR(STATUS) AS STATUS,
+                   TO_CHAR(TUNED_TEST) AS TUNED_TEST,
+                   LOG,
+                   TO_CHAR(UPD_TS, 'YYYY-MM-DD HH24:MI:SS') AS UPD_TS
+            FROM {SQL_TABLE}
+            WHERE UPPER(TRIM(STATUS)) = 'FAIL'
+            ORDER BY UPD_TS DESC NULLS LAST
+        )
+        WHERE ROWNUM <= :1
+    """
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(q, (int(limit),))
+            return _to_dicts(cur)
+    except Exception:
+        return []
+
+
+def get_sql_tuning_failure_analysis_rows(limit: int = 200) -> list[dict]:
+    """Return recent SQL tuning FAIL rows for supervisor aggregate analysis."""
+    available_columns = _get_available_columns(SQL_TABLE)
+    map_kind_column = "TO_CHAR(MAP_KIND) AS MAP_KIND" if "MAP_KIND" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS MAP_KIND"
+    map_type_column = "TO_CHAR(MAP_TYPE) AS MAP_TYPE" if "MAP_TYPE" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS MAP_TYPE"
+    tag_kind_column = "TO_CHAR(TAG_KIND) AS TAG_KIND" if "TAG_KIND" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS TAG_KIND"
+    sql_length_column = "SQL_LENGTH" if "SQL_LENGTH" in available_columns else "CAST(NULL AS NUMBER)"
+    tuned_len_expr = "DBMS_LOB.GETLENGTH(TUNED_SQL)" if "TUNED_SQL" in available_columns else "0"
+
+    q = f"""
+        SELECT *
+        FROM (
+            SELECT TO_CHAR(SQL_ID) AS SQL_ID,
+                   TO_CHAR(SPACE_NM) AS SPACE_NM,
+                   {map_kind_column},
+                   {tag_kind_column},
+                   {map_type_column},
+                   {sql_length_column} AS SQL_LENGTH,
+                   DBMS_LOB.GETLENGTH(FR_SQL_TEXT) AS FR_SQL_LEN,
+                   DBMS_LOB.GETLENGTH(TO_SQL_TEXT) AS TO_SQL_LEN,
+                   {tuned_len_expr} AS TUNED_SQL_LEN,
+                   TO_CHAR(STATUS) AS STATUS,
+                   TO_CHAR(TUNED_TEST) AS TUNED_TEST,
+                   LOG,
+                   TO_CHAR(UPD_TS, 'YYYY-MM-DD HH24:MI:SS') AS UPD_TS
+            FROM {SQL_TABLE}
+            WHERE UPPER(TRIM(TUNED_TEST)) = 'FAIL'
+            ORDER BY UPD_TS DESC NULLS LAST
+        )
+        WHERE ROWNUM <= :1
+    """
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(q, (int(limit),))
+            return _to_dicts(cur)
+    except Exception:
+        return []
+
+
+# ── 작업 완료 대기 (챗봇 재실행 후 결과 반환용) ──────────────────────────────────
+
+_MIG_RUNNING  = {"", "RUNNING"}
+_SQL_RUNNING  = {"URGENT", "RUNNING", ""}
+
+def poll_mig_job_result(map_id: int, timeout_sec: int = 300, interval: float = 3.0) -> dict:
+    """Migration 작업이 완료될 때까지 대기하고 최종 상태와 로그를 반환합니다."""
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        try:
+            jobs = {int(j["MAP_ID"]): j for j in get_mig_jobs()}
+            job = jobs.get(map_id, {})
+            status = str(job.get("STATUS") or "").strip().upper()
+            if status not in _MIG_RUNNING:
+                logs = get_mig_logs(map_id)
+                return {
+                    "completed": True,
+                    "map_id":    map_id,
+                    "status":    status,
+                    "fr_table":  job.get("FR_TABLE"),
+                    "to_table":  job.get("TO_TABLE"),
+                    "elapsed":   job.get("ELAPSED_SECONDS"),
+                    "retry":     job.get("RETRY_COUNT"),
+                    "last_logs": [
+                        {
+                            "step":    lg.get("STEP_NAME"),
+                            "level":   lg.get("LOG_LEVEL"),
+                            "message": str(lg.get("MESSAGE") or "")[:300],
+                        }
+                        for lg in logs[-5:]
+                    ],
+                }
+        except Exception:
+            pass
+        time.sleep(interval)
+    return {"completed": False, "map_id": map_id, "reason": f"{timeout_sec}초 내에 완료되지 않았습니다."}
+
+
+def poll_sql_job_result(
+    sql_id: str,
+    field: str,
+    space_nm: str | None = None,
+    timeout_sec: int = 300,
+    interval: float = 3.0,
+) -> dict:
+    """SQL 변환/튜닝 작업이 완료될 때까지 대기하고 최종 상태와 로그를 반환합니다.
+
+    field: 'STATUS' (변환) 또는 'TUNED_TEST' (튜닝)
+    """
+    deadline = time.time() + timeout_sec
+    field_upper = field.upper()
+    while time.time() < deadline:
+        try:
+            rows = get_sql_failure_log(sql_id, space_nm)
+            if rows:
+                row = rows[0]
+                val = str(row.get(field_upper) or "").strip().upper()
+                if val not in _SQL_RUNNING:
+                    return {
+                        "completed":  True,
+                        "sql_id":     sql_id,
+                        "space_nm":   row.get("SPACE_NM"),
+                        "field":      field_upper,
+                        "result":     val,
+                        "log":        str(row.get("LOG") or "")[:500],
+                        "status":     row.get("STATUS"),
+                        "tuned_test": row.get("TUNED_TEST"),
+                    }
+        except Exception:
+            pass
+        time.sleep(interval)
+    return {"completed": False, "sql_id": sql_id, "reason": f"{timeout_sec}초 내에 완료되지 않았습니다."}
 
 
 def get_sql_job_full(row_id: str) -> dict | None:

@@ -2,6 +2,7 @@ import os
 import re
 import json
 import streamlit as st
+from collections import Counter
 from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
@@ -19,13 +20,19 @@ from utils.db import (
     reset_sql_conversion_job,
     reset_sql_tuning_job,
     get_sql_failure_log,
+    get_sql_conversion_failure_analysis_rows,
+    get_sql_tuning_failure_analysis_rows,
+    poll_mig_job_result,
+    poll_sql_job_result,
 )
 from utils.env_manager import read_env
+from utils.agent_control import get_status as _agent_status, start as _start_supervisor
 
 _ROOT      = Path(__file__).resolve().parent.parent.parent
 load_dotenv(_ROOT / ".env")
 _CHATS_DIR = _ROOT / "runtime" / "chats"
 _WAKE_FILE = _ROOT / "runtime" / "agent.wake"
+_FAIL_ANALYSIS_HINTS_FILE = _ROOT / "app" / "config" / "fail_analysis_hints.json"
 
 
 def _is_supervisor_mode() -> bool:
@@ -42,7 +49,129 @@ def _wake_supervisor() -> None:
         pass
 
 
+_TARGET_JOB_FILE = _ROOT / "runtime" / "target_job.json"
+
+
+def _write_target_job(data: dict) -> None:
+    """Supervisor의 다음 사이클에서 이 job만 처리하도록 지시합니다."""
+    try:
+        _TARGET_JOB_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _TARGET_JOB_FILE.write_text(
+            json.dumps(data, ensure_ascii=False), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
+def _ensure_supervisor_running() -> None:
+    """Supervisor가 꺼져 있으면 자동으로 시작하고, 실행 중이면 즉시 깨웁니다."""
+    if not _agent_status()["running"]:
+        _start_supervisor()
+    else:
+        _wake_supervisor()
+
+
 # ── Supervisor Function-Calling 도구 정의 ─────────────────────────────────────
+def _num(value, default: int = 0) -> int:
+    try:
+        return int(float(str(value or "").strip()))
+    except Exception:
+        return default
+
+
+def _length_bucket(row: dict) -> str:
+    length = _num(row.get("EFFECTIVE_SQL_LEN") or row.get("SQL_LENGTH") or row.get("FR_SQL_LEN"))
+    if length <= 0:
+        return "UNKNOWN"
+    if length <= 5000:
+        return "SHORT_<=5000"
+    if length <= 20000:
+        return "MEDIUM_5001_20000"
+    return "LONG_>20000"
+
+
+def _classify_sql_fail_log(log_text: str) -> str:
+    text = (log_text or "").upper()
+    patterns = [
+        ("MISSING_ORDER_BY_EXPRESSION", ["MISSING ORDER BY EXPRESSION", "ORDER BY EXPRESSION", "ROW_NUMBER"]),
+        ("BIND_VARIABLE", ["BIND", "ORA-01008", "ORA-01036"]),
+        ("UNEXPECTED_END_OF_SQL_COMMAND", ["UNEXPECTED END OF SQL COMMAND"]),
+        ("INVALID_IDENTIFIER", ["INVALID IDENTIFIER", "ORA-00904"]),
+        ("INVALID_NUMBER", ["INVALID NUMBER", "ORA-01722"]),
+        ("SYNTAX_OR_PARSE", ["ORA-00900", "ORA-00905", "ORA-00907", "ORA-00923", "ORA-00933", "PARSE"]),
+        ("OBJECT_OR_COLUMN", ["ORA-00942", "ORA-01403", "INVALID IDENTIFIER", "TABLE OR VIEW"]),
+        ("DATA_TYPE", ["ORA-01722", "ORA-018", "ORA-00932", "INCONSISTENT DATATYPES", "INVALID NUMBER"]),
+        ("VALIDATION_COUNT_MISMATCH", ["VALIDATION_FAIL", "COUNT", "BASELINE_COUNT", "TUNED_COUNT", "FROM_COUNT", "TO_COUNT"]),
+        ("TIMEOUT_OR_PERFORMANCE", ["TIMEOUT", "ORA-01013", "ELAPSED", "PERFORMANCE"]),
+        ("LLM_OR_JSON", ["JSON", "LLM", "MODEL", "PARSE_LLM", "RESPONSE"]),
+        ("EMPTY_OR_MISSING_SQL", ["EMPTY", "NULL SQL", "NO SQL", "MISSING"]),
+    ]
+    for label, needles in patterns:
+        if any(needle in text for needle in needles):
+            return label
+    if text.strip():
+        return "OTHER_ERROR"
+    return "NO_LOG"
+
+
+def _load_fail_analysis_hints(stage: str) -> list[dict]:
+    try:
+        data = json.loads(_FAIL_ANALYSIS_HINTS_FILE.read_text(encoding="utf-8"))
+        key = "sql_tuning_hints" if stage == "SQL_TUNING" else "sql_conversion_hints"
+        hints = data.get(key, [])
+        return hints if isinstance(hints, list) else []
+    except Exception:
+        return []
+
+
+def _top_counter(counter: Counter, limit: int = 12) -> list[dict]:
+    return [{"name": str(name), "count": int(count)} for name, count in counter.most_common(limit)]
+
+
+def _summarize_sql_fail_rows(rows: list[dict], stage: str) -> dict:
+    map_kind_counts: Counter = Counter()
+    length_counts: Counter = Counter()
+    log_type_counts: Counter = Counter()
+    status_counts: Counter = Counter()
+    samples = []
+
+    for row in rows:
+        map_kind = (row.get("MAP_KIND") or row.get("MAP_TYPE") or row.get("TAG_KIND") or "UNKNOWN").strip() or "UNKNOWN"
+        map_kind_counts[map_kind] += 1
+        length_counts[_length_bucket(row)] += 1
+        log_type = _classify_sql_fail_log(str(row.get("LOG") or ""))
+        log_type_counts[log_type] += 1
+        status_counts[str(row.get("STATUS") or "NULL").strip() or "NULL"] += 1
+        if len(samples) < 30:
+            samples.append({
+                "sql_id": row.get("SQL_ID"),
+                "space_nm": row.get("SPACE_NM"),
+                "map_kind": map_kind,
+                "length_bucket": _length_bucket(row),
+                "status": row.get("STATUS"),
+                "tuned_test": row.get("TUNED_TEST"),
+                "log_type": log_type,
+                "log": str(row.get("LOG") or "")[:800],
+                "upd_ts": row.get("UPD_TS"),
+            })
+
+    return {
+        "stage": stage,
+        "total_fail_rows": len(rows),
+        "map_kind_counts": _top_counter(map_kind_counts),
+        "length_counts": _top_counter(length_counts),
+        "status_counts": _top_counter(status_counts),
+        "log_type_counts": _top_counter(log_type_counts),
+        "recent_samples": samples,
+        "admin_fail_cause_hints": _load_fail_analysis_hints(stage),
+        "analysis_instruction": (
+            "First summarize statistics by map_kind and SQL length. Then count log categories. "
+            "Use admin_fail_cause_hints as high-priority domain knowledge when log keywords match. "
+            "Finally infer the most likely major causes in Korean, with caveats if logs are sparse."
+        ),
+    }
+
+
 _SUPERVISOR_TOOLS = [
     {
         "type": "function",
@@ -76,6 +205,46 @@ _SUPERVISOR_TOOLS = [
                     "space_nm": {"type": "string", "description": "네임스페이스 (선택, 같은 sql_id가 여러 개일 때 구분)"},
                 },
                 "required": ["sql_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "analyze_sql_conversion_failures",
+            "description": (
+                "최근 SQL Conversion FAIL 전체를 종합 분석합니다. "
+                "NEXT_SQL_INFO에서 STATUS='FAIL'인 row를 모아 MAP_TYPE/TAG_KIND, SQL 길이 구간, "
+                "LOG 에러 유형별 건수와 주요 원인 추정을 생성할 때 사용하세요."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "최근 FAIL 분석 대상 최대 건수. 기본값 200.",
+                    }
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "analyze_sql_tuning_failures",
+            "description": (
+                "최근 SQL Tuning FAIL 전체를 종합 분석합니다. "
+                "NEXT_SQL_INFO에서 TUNED_TEST='FAIL'인 row를 모아 MAP_TYPE/TAG_KIND, SQL 길이 구간, "
+                "LOG 에러 유형별 건수와 주요 원인 추정을 생성할 때 사용하세요."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "최근 FAIL 분석 대상 최대 건수. 기본값 200.",
+                    }
+                },
             },
         },
     },
@@ -187,42 +356,58 @@ def _handle_supervisor_tool(name: str, args: dict) -> str:
                 ],
             }, ensure_ascii=False, default=str)
 
+        if name == "analyze_sql_conversion_failures":
+            limit = int(args.get("limit") or 200)
+            rows = get_sql_conversion_failure_analysis_rows(limit=limit)
+            return json.dumps(
+                _summarize_sql_fail_rows(rows, stage="SQL_CONVERSION"),
+                ensure_ascii=False,
+                default=str,
+            )
+
+        if name == "analyze_sql_tuning_failures":
+            limit = int(args.get("limit") or 200)
+            rows = get_sql_tuning_failure_analysis_rows(limit=limit)
+            return json.dumps(
+                _summarize_sql_fail_rows(rows, stage="SQL_TUNING"),
+                ensure_ascii=False,
+                default=str,
+            )
+
         if name == "rerun_migration":
             map_id = int(args["map_id"])
             ok = reset_mig_job_for_rerun(map_id)
-            if ok:
-                _wake_supervisor()
-            return json.dumps({
-                "success": ok,
-                "map_id":  map_id,
-                "action":  "USE_YN='Y', STATUS=NULL, MIG_SQL=NULL, RETRY_COUNT=0 초기화. Supervisor 즉시 알림 완료.",
-            }, ensure_ascii=False)
+            if not ok:
+                return json.dumps({"success": False, "map_id": map_id,
+                                   "reason": "DB에서 해당 MAP_ID를 찾을 수 없습니다."}, ensure_ascii=False)
+            _write_target_job({"type": "mig", "map_id": map_id})
+            _ensure_supervisor_running()
+            result = poll_mig_job_result(map_id, timeout_sec=300)
+            return json.dumps(result, ensure_ascii=False, default=str)
 
         if name == "rerun_sql_conversion":
             sql_id   = args["sql_id"]
             space_nm = args.get("space_nm")
             cnt = reset_sql_conversion_job(sql_id, space_nm)
-            if cnt > 0:
-                _wake_supervisor()
-            return json.dumps({
-                "success":      cnt > 0,
-                "sql_id":       sql_id,
-                "updated_rows": cnt,
-                "action":       f"NEXT_SQL_INFO.STATUS='URGENT' 설정 ({cnt}건). Supervisor 즉시 알림 완료.",
-            }, ensure_ascii=False)
+            if cnt == 0:
+                return json.dumps({"success": False, "sql_id": sql_id,
+                                   "reason": "DB에서 해당 SQL_ID를 찾을 수 없습니다."}, ensure_ascii=False)
+            _write_target_job({"type": "sql_conv", "sql_id": sql_id, "space_nm": space_nm})
+            _ensure_supervisor_running()
+            result = poll_sql_job_result(sql_id, field="STATUS", space_nm=space_nm, timeout_sec=300)
+            return json.dumps(result, ensure_ascii=False, default=str)
 
         if name == "rerun_sql_tuning":
             sql_id   = args["sql_id"]
             space_nm = args.get("space_nm")
             cnt = reset_sql_tuning_job(sql_id, space_nm)
-            if cnt > 0:
-                _wake_supervisor()
-            return json.dumps({
-                "success":      cnt > 0,
-                "sql_id":       sql_id,
-                "updated_rows": cnt,
-                "action":       f"NEXT_SQL_INFO.TUNED_TEST='URGENT' 설정 ({cnt}건). Supervisor 즉시 알림 완료.",
-            }, ensure_ascii=False)
+            if cnt == 0:
+                return json.dumps({"success": False, "sql_id": sql_id,
+                                   "reason": "DB에서 해당 SQL_ID를 찾을 수 없습니다."}, ensure_ascii=False)
+            _write_target_job({"type": "sql_tune", "sql_id": sql_id, "space_nm": space_nm})
+            _ensure_supervisor_running()
+            result = poll_sql_job_result(sql_id, field="TUNED_TEST", space_nm=space_nm, timeout_sec=300)
+            return json.dumps(result, ensure_ascii=False, default=str)
 
         return json.dumps({"error": f"알 수 없는 도구: {name}"})
 
@@ -374,9 +559,20 @@ def _system_prompt(supervisor_mode: bool = False) -> str:
             "",
             "도구 선택 기준:",
             "- '왜 실패했어?', '실패 원인', '로그 보여줘' → query_mig_failure_log 또는 query_sql_failure_log",
+            "- 'SQL Conversion Fail 종합 분석', '최근 SQL Conversion Fail 원인 종합 분석' → analyze_sql_conversion_failures",
+            "- 'SQL Tuning Fail 종합 분석', '최근 SQL Tuning Fail 원인 종합 분석' → analyze_sql_tuning_failures",
             "- '재실행해줘', '다시 돌려줘', '다시 실행' + migration/이관 → rerun_migration",
             "- '재실행해줘', '다시 돌려줘' + sql 변환/conversion → rerun_sql_conversion",
             "- '재실행해줘', '다시 돌려줘' + sql 튜닝/tuning → rerun_sql_tuning",
+            "",
+            "종합 분석 답변 형식:",
+            "1) 전체 FAIL 건수와 MAP_KIND/MAP_TYPE 분포",
+            "2) SQL LENGTH 구간별 분포",
+            "3) LOG 유형별 건수",
+            "4) 관리자 원인 힌트와 실제 LOG 패턴을 대조한 주요 원인 추정과 근거",
+            "5) 다음 확인/개선 질문 2~3개",
+            "관리자 원인 힌트(admin_fail_cause_hints)는 높은 우선순위의 도메인 지식입니다.",
+            "다만 LOG 근거가 부족하면 가능성으로 표현하고, 어떤 추가 확인이 필요한지 질문하세요.",
             "",
             f"[현재 시각: {now}]",
             "",
@@ -857,6 +1053,16 @@ def render():
             if supervisor_mode
             else "메시지를 입력하세요..."
         )
+        quick_prompt = None
+        if supervisor_mode:
+            q1, q2 = st.columns(2)
+            with q1:
+                if st.button("SQL Conversion Fail 종합 분석", width="stretch"):
+                    quick_prompt = "최근 SQL Conversion Fail 원인 종합 분석해줘."
+            with q2:
+                if st.button("SQL Tuning Fail 종합 분석", width="stretch"):
+                    quick_prompt = "최근 SQL Tuning Fail 원인 종합 분석해줘."
+
         user_input = st.chat_input(placeholder_text, key="chat_input")
 
     # ════════════════════════════════════════════════════════════
@@ -892,8 +1098,9 @@ def render():
             st.error(str(e))
 
     # ── 메시지 처리 (컬럼 밖에서) ─────────────────────────────────────────────
-    if user_input and user_input.strip():
-        user_text = user_input.strip()
+    selected_input = quick_prompt or user_input
+    if selected_input and selected_input.strip():
+        user_text = selected_input.strip()
 
         # 유저 메시지 추가 후 LLM 응답 요청 (Supervisor 모드에서는 LLM이 직접 도구 판단)
         chat["messages"].append({"role": "user", "content": user_text})

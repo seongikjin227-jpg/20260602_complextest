@@ -372,3 +372,60 @@ python -m json.tool server/config/prompts/sql_indent_format_prompt.json
 - `FORMATTED_SQL`은 XML export의 기준 SQL입니다.
 - `NA`는 conversion/test 대상에서 제외할 때 사용합니다.
 - `SKIP`은 사용자가 의도적으로 제외한 상태로 사용합니다. 자동 non-SELECT 튜닝 검증 생략은 `PASS_NON_SELECT`를 사용합니다.
+
+## Supervisor 챗봇 FAIL 종합 분석
+
+Supervisor 모드의 대시보드 챗봇은 SQL 실패 원인을 단건 조회하거나, 최근 FAIL 작업을 모아 종합 분석할 수 있습니다.
+
+### 지원 질문
+
+- `최근 SQL Conversion Fail 원인 종합 분석해줘.`
+- `최근 SQL Tuning Fail 원인 종합 분석해줘.`
+- `map_id=5 실패 원인이 뭐야?`
+- `sql_id=ABC 실패 원인 분석해줘.`
+
+Supervisor 모드에서는 채팅 입력창 위에 다음 빠른 실행 버튼도 표시됩니다.
+
+- `SQL Conversion Fail 종합 분석`
+- `SQL Tuning Fail 종합 분석`
+
+### 분석 방식
+
+SQL Conversion 종합 분석은 `NEXT_SQL_INFO.STATUS = 'FAIL'`인 최근 row를 대상으로 합니다.
+
+SQL Tuning 종합 분석은 `NEXT_SQL_INFO.TUNED_TEST = 'FAIL'`인 최근 row를 대상으로 합니다.
+
+챗봇은 다음 정보를 tool 결과로 받아 LLM 답변을 생성합니다.
+
+- 전체 FAIL 건수
+- `MAP_KIND`, `MAP_TYPE`, `TAG_KIND` 기준 분포
+- SQL 길이 구간별 분포
+- LOG 패턴별 분류 건수
+- 최근 실패 샘플 로그
+- 관리자 원인 힌트
+
+### 관리자 원인 힌트
+
+관리자가 파악한 장애 원인은 다음 파일에 추가합니다.
+
+```text
+app/config/fail_analysis_hints.json
+```
+
+현재 구조는 SQL Conversion과 SQL Tuning 힌트를 분리합니다.
+
+```json
+{
+  "sql_conversion_hints": [],
+  "sql_tuning_hints": []
+}
+```
+
+현재 등록된 SQL Conversion 주요 원인 힌트는 다음과 같습니다.
+
+- `missing ORDER BY expression`: `ROW_NUMBER()` 같은 분석 함수에서 `OVER()` 절 안의 `ORDER BY`가 누락된 경우
+- `invalid identifier`: 매핑룰 적용 오류 또는 Alias-컬럼 관계 불일치
+- `unexpected end of SQL command`: 날짜 변환 함수의 데이터 형식 불일치 또는 SQL 구문 미완성
+- `invalid number`: 숫자형/문자형 타입 변환 실패, 불필요한 따옴표 또는 암시적 형변환 문제
+
+SQL Tuning 원인 힌트는 별도로 `sql_tuning_hints`에 추가합니다.
