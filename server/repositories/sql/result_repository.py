@@ -368,13 +368,13 @@ def update_tuning_error(row_id: str, error_msg: str, tuned_sql: str | None = Non
         logger.error(f"[Repo] Tuning error update failed: {e}")
 
 
-def update_job_na(row_id: str, reason: str) -> None:
+def update_job_skip(row_id: str, reason: str) -> None:
     table = get_result_table()
     payload = _fit_payload_to_column_limits(
         table=table,
         values={
-            "STATUS": "NA",
-            "LOG": f"NA reason={reason}",
+            "STATUS": "SKIP",
+            "LOG": f"SKIP reason={reason}",
         },
     )
     query = f"""

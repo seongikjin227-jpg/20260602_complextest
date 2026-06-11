@@ -21,7 +21,7 @@ from server.repositories.sql.result_repository import (
     update_job_classification,
     update_cycle_result,
     update_fr_bindtuned_sql,
-    update_job_na,
+    update_job_skip,
 )
 from server.repositories.sql.log_repository import insert_sql_log
 from server.services.sql.binding_service import bind_sets_to_json, build_bind_sets, extract_bind_param_names
@@ -550,21 +550,21 @@ class TobeMultiAgentCoordinator:
             unready_target_tables = get_unready_target_tables(job.target_table)
         if unready_target_tables:
             reason = "TARGET_MAPPING_NOT_READY: " + ",".join(unready_target_tables)
-            update_job_na(row_id=job.row_id, reason=reason)
+            update_job_skip(row_id=job.row_id, reason=reason)
             insert_sql_log(
                 space_nm=job.space_nm,
                 sql_id=job.sql_id,
                 sql_info_rowid=job.row_id,
                 sql_kind="ERROR",
                 sql_content=None,
-                status="NA",
+                status="SKIP",
                 model_name=os.getenv("LLM_MODEL", "").strip(),
                 attempt_no=_attempt_no(state.last_error),
                 stage_name="CHECK_TARGET_MAPPING",
                 error_message=reason,
             )
             logger.warning(f"[TobeMultiAgentCoordinator] ({job_key}) excluded: {reason}")
-            return "NA"
+            return "SKIP"
 
         while retry_count < max_retries:
             raw_last_error = state.last_error
