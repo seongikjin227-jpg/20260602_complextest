@@ -25,7 +25,7 @@ def get_pending_jobs() -> list[MappingRule]:
             R.USE_YN, R.TARGET_YN, R.PRIORITY,
             R.MIG_SQL, R.VERIFY_SQL, R.STATUS, R.CORRECT_SQL, R.USER_EDITED,
             R.BATCH_CNT, R.ELAPSED_SECONDS, R.RETRY_COUNT,
-            R.CREATED_AT, R.UPD_TS,
+            R.CREATED_AT, R.UPD_TS, R.CONDITION,
             D.MAP_DTL, D.FR_COL, D.TO_COL
         FROM {map_table} R
         LEFT JOIN {detail_table} D ON R.MAP_ID = D.MAP_ID
@@ -61,16 +61,17 @@ def get_pending_jobs() -> list[MappingRule]:
                         retry_count=row[14] if row[14] is not None else 0,
                         created_at=row[15],
                         upd_ts=row[16],
+                        condition=ensure_str(row[17]),
                         details=[]
                     )
                     jobs[map_id] = rule
 
-                if row[17] is not None:
+                if row[18] is not None:
                     detail = MappingDetail(
-                        map_dtl=row[17],
+                        map_dtl=row[18],
                         map_id=map_id,
-                        fr_col=ensure_str(row[18]),
-                        to_col=ensure_str(row[19])
+                        fr_col=ensure_str(row[19]),
+                        to_col=ensure_str(row[20])
                     )
                     jobs[map_id].details.append(detail)
 

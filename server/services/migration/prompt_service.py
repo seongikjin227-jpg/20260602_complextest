@@ -16,6 +16,7 @@ def build_migration_prompt(
     mapping_info: str,
     ddl_info_block: str,
     is_append: bool,
+    condition: str = '',
     correct_sql: str | None = None,
     last_error: str | None = None,
     last_sql: str | None = None,
@@ -35,6 +36,7 @@ def build_migration_prompt(
         mapping_info=mapping_info,
         ddl_info_block=ddl_info_block,
         verification_instruction=verification_instruction,
+        condition=condition,
     )
 
     if correct_sql:

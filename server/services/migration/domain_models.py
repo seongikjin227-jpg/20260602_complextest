@@ -25,6 +25,7 @@ class MappingRule:
     status: Optional[str] = None
     correct_sql: Optional[str] = None
     user_edited: Optional[str] = None
+    condition: Optional[str] = None
     batch_cnt: int = 0
     elapsed_seconds: int = 0
     retry_count: int = 0

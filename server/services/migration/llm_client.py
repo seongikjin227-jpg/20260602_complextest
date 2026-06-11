@@ -112,6 +112,7 @@ def generate_sqls(NEXT_SQL_INFO, last_error=None, last_sql=None, source_ddl=None
 
     from_table = qualify_fr_table(NEXT_SQL_INFO.fr_table)
     to_table = qualify_to_table(NEXT_SQL_INFO.to_table)
+    condition = getattr(NEXT_SQL_INFO, 'condition', None) or ''
 
     details = NEXT_SQL_INFO.details
     mapping_info = "\n".join([f"  - {d.fr_col} -> {d.to_col}" for d in details])
@@ -155,6 +156,7 @@ def generate_sqls(NEXT_SQL_INFO, last_error=None, last_sql=None, source_ddl=None
         mapping_info=mapping_info,
         ddl_info_block=ddl_info_block,
         is_append=is_append,
+        condition=condition,
         correct_sql=NEXT_SQL_INFO.correct_sql or None,
         last_error=last_error,
         last_sql=last_sql,
