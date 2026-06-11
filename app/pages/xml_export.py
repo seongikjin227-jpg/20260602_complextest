@@ -32,6 +32,10 @@ def _safe_file_name(namespace: str) -> str:
     return name or "mapper"
 
 
+def _mapper_file_name(namespace: str) -> str:
+    return f"mapper-{_safe_file_name(namespace)}.xml"
+
+
 def _build_xml(namespace: str, rows: list[dict]) -> str:
     lines = [_XML_HEADER, "", f'<mapper namespace="{escape(namespace, quote=True)}">']
     for row in rows:
@@ -41,10 +45,7 @@ def _build_xml(namespace: str, rows: list[dict]) -> str:
         tag = (row.get("TAG_KIND") or "select").strip().lower() or "select"
         sql_id = escape((row.get("SQL_ID") or "").strip(), quote=True)
         sql = (row.get("FORMATTED_SQL") or "").strip()
-        if tag == "select":
-            open_tag = f'  <{tag} id="{sql_id}" resultType="hashmap">'
-        else:
-            open_tag = f'  <{tag} id="{sql_id}">'
+        open_tag = f'  <{tag} id="{sql_id}">'
         lines.append(open_tag)
         for sql_line in sql.splitlines():
             lines.append(f"    {sql_line}")
@@ -72,7 +73,7 @@ def _build_bulk_zip(grouped: dict[str, list[dict]]) -> bytes:
             if not rows:
                 continue
             zip_file.writestr(
-                f"{_safe_file_name(namespace)}.xml",
+                _mapper_file_name(namespace),
                 _build_xml(namespace, rows),
             )
     return buffer.getvalue()
@@ -147,7 +148,7 @@ def render():
         st.download_button(
             "XML 다운로드" if selected_available else "Not available",
             data=xml_text.encode("utf-8"),
-            file_name=f"{_safe_file_name(selected_ns)}.xml",
+            file_name=_mapper_file_name(selected_ns),
             mime="application/xml",
             disabled=not selected_available,
             width="stretch",

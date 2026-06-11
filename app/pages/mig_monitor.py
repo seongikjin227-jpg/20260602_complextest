@@ -5,6 +5,13 @@ from utils.db import get_mig_jobs, get_mig_dtl, get_mig_logs
 _COLS_TABLE = ["MAP_ID", "STATUS", "FR_TABLE", "TO_TABLE", "USE_YN", "TARGET_YN",
                "PRIORITY", "RETRY_COUNT", "ELAPSED_SECONDS", "UPD_TS"]
 
+_MIG_DETAIL_OPTIONS = {
+    "MIG SQL": "MIG_SQL",
+    "VERIFY SQL": "VERIFY_SQL",
+    "CORRECT SQL": "CORRECT_SQL",
+    "LOG": "__LOG__",
+}
+
 
 def render():
     st.title("📦 Mig Agent Monitor")
@@ -81,20 +88,33 @@ def render():
         st.write(f"**RETRY_COUNT:** {row.get('RETRY_COUNT')}")
         st.write(f"**ELAPSED_SECONDS:** {row.get('ELAPSED_SECONDS')}s")
 
-    tab1, tab2, tab3 = st.tabs(["MIG SQL", "VERIFY SQL", "로그"])
+    st.subheader("컬럼 비교")
+    detail_labels = list(_MIG_DETAIL_OPTIONS.keys())
+    left_picker, right_picker = st.columns(2)
+    with left_picker:
+        left_label = st.selectbox("왼쪽 컬럼", detail_labels, index=0, key="mig_monitor_left_col")
+    with right_picker:
+        right_label = st.selectbox("오른쪽 컬럼", detail_labels, index=1, key="mig_monitor_right_col")
 
-    with tab1:
-        st.code(row.get("MIG_SQL") or "(없음)", language="sql")
+    logs = get_mig_logs(map_id)
 
-    with tab2:
-        st.code(row.get("VERIFY_SQL") or "(없음)", language="sql")
-
-    with tab3:
-        logs = get_mig_logs(map_id)
-        if logs:
-            st.dataframe(pd.DataFrame(logs), width="stretch", hide_index=True)
+    def _render_value(label: str):
+        column = _MIG_DETAIL_OPTIONS[label]
+        if column == "__LOG__":
+            if logs:
+                st.dataframe(pd.DataFrame(logs), width="stretch", hide_index=True)
+            else:
+                st.info("로그 없음")
         else:
-            st.info("로그 없음")
+            st.code(row.get(column) or "(없음)", language="sql")
+
+    c_left, c_right = st.columns(2)
+    with c_left:
+        st.caption(left_label)
+        _render_value(left_label)
+    with c_right:
+        st.caption(right_label)
+        _render_value(right_label)
 
     with st.expander("컬럼 매핑 정보"):
         dtl = get_mig_dtl(map_id)

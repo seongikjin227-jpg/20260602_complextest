@@ -59,6 +59,17 @@ def reset_active_model() -> str | None:
 
 def is_model_fallback_error(message: str) -> bool:
     text = (message or "").lower()
+    api_key_rate_limit_patterns = (
+        "rate limit exceed for api_key",
+        "rate limit exceeded for api_key",
+        "rate_limit_exceed_for_api_key",
+        "rate_limit_exceeded_for_api_key",
+    )
+    if ("429" in text or "rate limit" in text) and any(
+        pattern in text for pattern in api_key_rate_limit_patterns
+    ):
+        return True
+
     fatal_patterns = (
         "model not allow",
         "model_not_allow",

@@ -6,7 +6,6 @@ from utils.db import get_sql_job_full, get_sql_jobs
 
 ALL = "전체"
 _COLS_TABLE = [
-    "ROW_ID",
     "SQL_ID",
     "SPACE_NM",
     "TAG_KIND",
@@ -19,6 +18,23 @@ _COLS_TABLE = [
     "TARGET_TABLE",
     "UPD_TS",
 ]
+
+_SQL_DETAIL_OPTIONS = {
+    "ASIS SQL": "FR_SQL_TEXT",
+    "EDIT ASIS SQL": "EDIT_FR_SQL",
+    "TOBE SQL": "TO_SQL_TEXT",
+    "BIND SQL": "BIND_SQL",
+    "BIND SET": "BIND_SET",
+    "TEST SQL": "TEST_SQL",
+    "TUNED SQL": "TUNED_SQL",
+    "TUNED RESULT": "TUNED_RESULT",
+    "FORMATTED SQL": "FORMATTED_SQL",
+    "TOBE CORRECT SQL": "TOBE_CORRECT_SQL",
+    "BIND CORRECT SQL": "BIND_CORRECT_SQL",
+    "TEST CORRECT SQL": "TEST_CORRECT_SQL",
+    "BLOCK RAG CONTENT": "BLOCK_RAG_CONTENT",
+    "LOG": "LOG",
+}
 
 
 def _prepare_df(rows: list[dict]) -> pd.DataFrame:
@@ -33,7 +49,6 @@ def _prepare_df(rows: list[dict]) -> pd.DataFrame:
         "SQL_LENGTH",
         "MAP_TYPE",
         "TARGET_TABLE",
-        "EDITED_YN",
         "FR_SQL_TEXT",
         "EDIT_FR_SQL",
         "TO_SQL_TEXT",
@@ -65,23 +80,6 @@ def _contains(series: pd.Series, keyword: str) -> pd.Series:
     return series.fillna("").astype(str).str.contains(keyword, case=False, na=False, regex=False)
 
 
-def _apply_length_filter(df: pd.DataFrame, preset: str, min_len: int, max_len: int) -> pd.DataFrame:
-    length = df["EFFECTIVE_FR_SQL_LEN"]
-    if preset == "5000 이하":
-        df = df[length <= 5000]
-        length = df["EFFECTIVE_FR_SQL_LEN"]
-    elif preset == "5000 초과":
-        df = df[length > 5000]
-        length = df["EFFECTIVE_FR_SQL_LEN"]
-
-    if min_len > 0:
-        df = df[length >= min_len]
-        length = df["EFFECTIVE_FR_SQL_LEN"]
-    if max_len > 0:
-        df = df[length <= max_len]
-    return df
-
-
 def render():
     st.title("SQL Agent Monitor")
 
@@ -101,7 +99,7 @@ def render():
     df_all = _prepare_df(jobs)
 
     with st.expander("검색 / 필터", expanded=True):
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3, c4 = st.columns([1.4, 1.4, 1, 1])
         with c1:
             sql_id_query = st.text_input("SQL_ID LIKE", placeholder="예: SEL_001")
         with c2:
@@ -122,16 +120,6 @@ def render():
             sel_sql_length = st.selectbox("SQL_LENGTH", _options(df_all, "SQL_LENGTH"))
         with c5:
             sel_tag_kind = st.selectbox("TAG_KIND", _options(df_all, "TAG_KIND"))
-
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            length_preset = st.selectbox("ASIS 길이 프리셋", [ALL, "5000 이하", "5000 초과"])
-        with c2:
-            min_len = st.number_input("ASIS 길이 이상", min_value=0, value=0, step=100)
-        with c3:
-            max_len = st.number_input("ASIS 길이 이하", min_value=0, value=0, step=100)
-        with c4:
-            sel_edited = st.selectbox("EDITED_YN", _options(df_all, "EDITED_YN"))
 
         presence = st.multiselect(
             "생성/로그 여부",
@@ -169,11 +157,6 @@ def render():
         df = df[df["SQL_LENGTH"] == sel_sql_length]
     if sel_tag_kind != ALL:
         df = df[df["TAG_KIND"] == sel_tag_kind]
-    if sel_edited != ALL:
-        df = df[df["EDITED_YN"] == sel_edited]
-
-    df = _apply_length_filter(df, length_preset, int(min_len), int(max_len))
-
     if "TOBE SQL 있음" in presence:
         df = df[df["TO_SQL_TEXT"].str.strip() != ""]
     if "TUNED SQL 있음" in presence:
@@ -184,8 +167,8 @@ def render():
         df = df[df["LOG"].str.strip() != ""]
 
     show_cols = [c for c in _COLS_TABLE if c in df.columns]
-    st.caption(f"검색 결과 {len(df)}건 / 전체 {len(df_all)}건")
-    st.dataframe(df[show_cols], width="stretch", hide_index=True)
+    with st.expander(f"검색 결과 표 ({len(df)}건 / 전체 {len(df_all)}건)", expanded=False):
+        st.dataframe(df[show_cols], width="stretch", hide_index=True)
 
     st.divider()
     st.subheader("SQL 상세 조회")
@@ -225,14 +208,28 @@ def render():
         else:
             st.info("로그 없음")
 
-    asis_sql = detail.get("EDIT_FR_SQL") or detail.get("FR_SQL_TEXT") or "(없음)"
-    tobe_sql = detail.get("TO_SQL_TEXT") or "(없음)"
+    st.subheader("SQL 컬럼 비교")
+    option_labels = list(_SQL_DETAIL_OPTIONS.keys())
+    left_picker, right_picker = st.columns(2)
+    with left_picker:
+        left_label = st.selectbox(
+            "왼쪽 컬럼",
+            option_labels,
+            index=0,
+            key="sql_monitor_left_col",
+        )
+    with right_picker:
+        right_label = st.selectbox(
+            "오른쪽 컬럼",
+            option_labels,
+            index=2,
+            key="sql_monitor_right_col",
+        )
 
     col1, col2 = st.columns(2)
     with col1:
-        edited = bool(detail.get("EDIT_FR_SQL"))
-        st.caption(f"ASIS SQL{' - 수정본' if edited else ''}")
-        st.code(asis_sql, language="sql")
+        st.caption(left_label)
+        st.code(detail.get(_SQL_DETAIL_OPTIONS[left_label]) or "(없음)", language="sql")
     with col2:
-        st.caption("TOBE SQL")
-        st.code(tobe_sql, language="sql")
+        st.caption(right_label)
+        st.code(detail.get(_SQL_DETAIL_OPTIONS[right_label]) or "(없음)", language="sql")

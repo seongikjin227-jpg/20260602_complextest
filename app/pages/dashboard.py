@@ -19,6 +19,7 @@ from utils.db import (
     reset_mig_job_for_rerun,
     reset_sql_conversion_job,
     reset_sql_tuning_job,
+    find_sql_job_spaces,
     get_sql_failure_log,
     get_sql_conversion_failure_analysis_rows,
     get_sql_tuning_failure_analysis_rows,
@@ -26,7 +27,7 @@ from utils.db import (
     poll_sql_job_result,
 )
 from utils.env_manager import read_env
-from utils.agent_control import get_status as _agent_status, start as _start_supervisor
+from utils.agent_control import get_status as _agent_status, start as _start_supervisor, stop as _stop_supervisor
 
 _ROOT      = Path(__file__).resolve().parent.parent.parent
 load_dotenv(_ROOT / ".env")
@@ -50,6 +51,7 @@ def _wake_supervisor() -> None:
 
 
 _TARGET_JOB_FILE = _ROOT / "runtime" / "target_job.json"
+_COMMAND_FILE = _ROOT / "runtime" / "chat_command.json"
 
 
 def _write_target_job(data: dict) -> None:
@@ -62,6 +64,23 @@ def _write_target_job(data: dict) -> None:
     except Exception:
         pass
 
+def _write_one_shot_command(command: str) -> None:
+    """Ask the background Supervisor to run exactly one requested cycle."""
+    try:
+        _COMMAND_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _COMMAND_FILE.write_text(
+            json.dumps({"command": command, "one_shot": True}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _target_qualifier(sql_id: str, space_nm: str | None = None) -> str:
+    if space_nm:
+        return f"SQL_ID={sql_id}, SPACE_NM={space_nm}"
+    return f"SQL_ID={sql_id}"
+
 
 def _ensure_supervisor_running() -> None:
     """Supervisor가 꺼져 있으면 자동으로 시작하고, 실행 중이면 즉시 깨웁니다."""
@@ -72,6 +91,16 @@ def _ensure_supervisor_running() -> None:
 
 
 # ── Supervisor Function-Calling 도구 정의 ─────────────────────────────────────
+def _stop_supervisor_for_one_shot() -> None:
+    """Interrupt the current Supervisor cycle before a chat-requested one-shot run."""
+    if _agent_status()["running"]:
+        _stop_supervisor()
+
+
+def _start_supervisor_for_one_shot() -> None:
+    _start_supervisor()
+
+
 def _num(value, default: int = 0) -> int:
     try:
         return int(float(str(value or "").strip()))
@@ -376,36 +405,87 @@ def _handle_supervisor_tool(name: str, args: dict) -> str:
 
         if name == "rerun_migration":
             map_id = int(args["map_id"])
+            _stop_supervisor_for_one_shot()
             ok = reset_mig_job_for_rerun(map_id)
             if not ok:
                 return json.dumps({"success": False, "map_id": map_id,
                                    "reason": "DB에서 해당 MAP_ID를 찾을 수 없습니다."}, ensure_ascii=False)
             _write_target_job({"type": "mig", "map_id": map_id})
-            _ensure_supervisor_running()
+            _write_one_shot_command(
+                f"One-shot request: run only Data Migration MAP_ID={map_id}. "
+                "Call poll_jobs() first, then run_data_migration for that map_id only. "
+                "Do not run SQL conversion, SQL tuning, or SQL formatting. "
+                "After the requested job, call flush_cycle_metrics() and finish."
+            )
+            _start_supervisor_for_one_shot()
             result = poll_mig_job_result(map_id, timeout_sec=300)
             return json.dumps(result, ensure_ascii=False, default=str)
 
         if name == "rerun_sql_conversion":
             sql_id   = args["sql_id"]
             space_nm = args.get("space_nm")
+            spaces = find_sql_job_spaces(sql_id)
+            if not spaces:
+                return json.dumps({"success": False, "sql_id": sql_id,
+                                   "reason": "DB에서 해당 SQL_ID를 찾을 수 없습니다."}, ensure_ascii=False)
+            if space_nm and str(space_nm) not in {str(s) for s in spaces}:
+                return json.dumps({"success": False, "sql_id": sql_id, "space_nm": space_nm,
+                                   "reason": "DB에서 해당 SQL_ID/SPACE_NM 조합을 찾을 수 없습니다.",
+                                   "space_nm_candidates": spaces}, ensure_ascii=False)
+            if not space_nm and len(spaces) > 1:
+                return json.dumps({
+                    "success": False,
+                    "sql_id": sql_id,
+                    "reason": "같은 SQL_ID가 여러 SPACE_NM에 존재합니다. SPACE_NM을 지정해야 합니다.",
+                    "space_nm_candidates": spaces,
+                }, ensure_ascii=False)
+            _stop_supervisor_for_one_shot()
             cnt = reset_sql_conversion_job(sql_id, space_nm)
             if cnt == 0:
                 return json.dumps({"success": False, "sql_id": sql_id,
                                    "reason": "DB에서 해당 SQL_ID를 찾을 수 없습니다."}, ensure_ascii=False)
             _write_target_job({"type": "sql_conv", "sql_id": sql_id, "space_nm": space_nm})
-            _ensure_supervisor_running()
+            _write_one_shot_command(
+                f"One-shot request: run only SQL Conversion for {_target_qualifier(sql_id, space_nm)}. "
+                "Call poll_jobs() first, then run_sql_conversion for the row_id returned in sql_jobs only. "
+                "Do not run Data Migration, SQL tuning, or SQL formatting. "
+                "After the requested job, call flush_cycle_metrics() and finish."
+            )
+            _start_supervisor_for_one_shot()
             result = poll_sql_job_result(sql_id, field="STATUS", space_nm=space_nm, timeout_sec=300)
             return json.dumps(result, ensure_ascii=False, default=str)
 
         if name == "rerun_sql_tuning":
             sql_id   = args["sql_id"]
             space_nm = args.get("space_nm")
+            spaces = find_sql_job_spaces(sql_id)
+            if not spaces:
+                return json.dumps({"success": False, "sql_id": sql_id,
+                                   "reason": "DB에서 해당 SQL_ID를 찾을 수 없습니다."}, ensure_ascii=False)
+            if space_nm and str(space_nm) not in {str(s) for s in spaces}:
+                return json.dumps({"success": False, "sql_id": sql_id, "space_nm": space_nm,
+                                   "reason": "DB에서 해당 SQL_ID/SPACE_NM 조합을 찾을 수 없습니다.",
+                                   "space_nm_candidates": spaces}, ensure_ascii=False)
+            if not space_nm and len(spaces) > 1:
+                return json.dumps({
+                    "success": False,
+                    "sql_id": sql_id,
+                    "reason": "같은 SQL_ID가 여러 SPACE_NM에 존재합니다. SPACE_NM을 지정해야 합니다.",
+                    "space_nm_candidates": spaces,
+                }, ensure_ascii=False)
+            _stop_supervisor_for_one_shot()
             cnt = reset_sql_tuning_job(sql_id, space_nm)
             if cnt == 0:
                 return json.dumps({"success": False, "sql_id": sql_id,
                                    "reason": "DB에서 해당 SQL_ID를 찾을 수 없습니다."}, ensure_ascii=False)
             _write_target_job({"type": "sql_tune", "sql_id": sql_id, "space_nm": space_nm})
-            _ensure_supervisor_running()
+            _write_one_shot_command(
+                f"One-shot request: run only SQL Tuning for {_target_qualifier(sql_id, space_nm)}. "
+                "Call poll_jobs() first, then run_sql_tuning for the row_id returned in tuning_jobs only. "
+                "Do not run Data Migration, SQL conversion, or SQL formatting. "
+                "After the requested job, call flush_cycle_metrics() and finish."
+            )
+            _start_supervisor_for_one_shot()
             result = poll_sql_job_result(sql_id, field="TUNED_TEST", space_nm=space_nm, timeout_sec=300)
             return json.dumps(result, ensure_ascii=False, default=str)
 

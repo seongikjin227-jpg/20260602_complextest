@@ -245,6 +245,9 @@ def get_sql_jobs() -> list[dict]:
     tuned_result_column = _optional_column_expr("TUNED_RESULT", available_columns)
     formatted_sql_column = _optional_column_expr("FORMATTED_SQL", available_columns)
     block_rag_column = _optional_column_expr("BLOCK_RAG_CONTENT", available_columns)
+    tobe_correct_column = _optional_column_expr("TOBE_CORRECT_SQL", available_columns)
+    bind_correct_column = _optional_column_expr("BIND_CORRECT_SQL", available_columns)
+    test_correct_column = _optional_column_expr("TEST_CORRECT_SQL", available_columns)
     sql_length_column = _optional_column_expr("SQL_LENGTH", available_columns)
     map_type_column = _optional_column_expr("MAP_TYPE", available_columns)
     edited_yn_column = _optional_column_expr("EDITED_YN", available_columns)
@@ -258,6 +261,7 @@ def get_sql_jobs() -> list[dict]:
                FR_SQL_TEXT, {edit_fr_sql_column}, {target_table_column},
                TO_SQL_TEXT, {tuned_sql_column}, {tuned_test_column}, {tuned_result_column},
                {formatted_sql_column}, {block_rag_column},
+               {tobe_correct_column}, {bind_correct_column}, {test_correct_column},
                {sql_length_column}, {map_type_column}, {edited_yn_column},
                DBMS_LOB.GETLENGTH(FR_SQL_TEXT) AS FR_SQL_LEN,
                {edit_len_expr} AS EDIT_FR_SQL_LEN,
@@ -529,6 +533,22 @@ def reset_mig_job_for_rerun(map_id: int) -> bool:
     except Exception:
         return False
 
+def find_sql_job_spaces(sql_id: str) -> list[str]:
+    """Return SPACE_NM values matching a SQL_ID, used to avoid ambiguous reruns."""
+    q = f"""
+        SELECT DISTINCT TO_CHAR(SPACE_NM) AS SPACE_NM
+        FROM {SQL_TABLE}
+        WHERE TO_CHAR(SQL_ID) = :1
+        ORDER BY TO_CHAR(SPACE_NM)
+    """
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(q, (sql_id,))
+            return [str(row[0] or "") for row in cur.fetchall()]
+    except Exception:
+        return []
+
 
 def reset_sql_conversion_job(sql_id: str, space_nm: str | None = None) -> int:
     """SQL 변환 작업을 URGENT 상태로 재설정합니다. 업데이트된 행 수를 반환합니다."""
@@ -779,6 +799,10 @@ def poll_sql_job_result(
 
 
 def get_sql_job_full(row_id: str) -> dict | None:
+    available_columns = _get_available_columns(SQL_TABLE)
+    tobe_correct_column = _optional_column_expr("TOBE_CORRECT_SQL", available_columns)
+    bind_correct_column = _optional_column_expr("BIND_CORRECT_SQL", available_columns)
+    test_correct_column = _optional_column_expr("TEST_CORRECT_SQL", available_columns)
     q = f"""
         SELECT ROWIDTOCHAR(ROWID) AS ROW_ID,
                TAG_KIND, SPACE_NM, SQL_ID,
@@ -786,6 +810,7 @@ def get_sql_job_full(row_id: str) -> dict | None:
                TO_SQL_TEXT, TUNED_SQL, TUNED_TEST, TUNED_RESULT,
                BIND_SQL, BIND_SET, TEST_SQL,
                FORMATTED_SQL, BLOCK_RAG_CONTENT,
+               {tobe_correct_column}, {bind_correct_column}, {test_correct_column},
                STATUS, LOG, TO_CHAR(UPD_TS) AS UPD_TS, EDITED_YN
         FROM {SQL_TABLE}
         WHERE ROWIDTOCHAR(ROWID) = :1
@@ -801,3 +826,41 @@ def get_sql_job_full(row_id: str) -> dict | None:
     except Exception:
         pass
     return None
+
+
+def update_sql_correct_sql(row_id: str, correct_kind: str, correct_sql: str) -> tuple[bool, str]:
+    column_map = {
+        "TOBE": "TOBE_CORRECT_SQL",
+        "BIND": "BIND_CORRECT_SQL",
+        "TEST": "TEST_CORRECT_SQL",
+    }
+    kind = (correct_kind or "").strip().upper()
+    column = column_map.get(kind)
+    if not column:
+        return False, "지원하지 않는 Correct SQL 유형입니다."
+
+    try:
+        available_columns = _get_available_columns(SQL_TABLE)
+    except Exception as exc:
+        return False, f"컬럼 정보를 조회하지 못했습니다: {exc}"
+
+    if column not in available_columns:
+        return False, f"{SQL_TABLE} 테이블에 {column} 컬럼이 없습니다."
+
+    q = f"""
+        UPDATE {SQL_TABLE}
+        SET {column} = :1,
+            UPD_TS = CURRENT_TIMESTAMP
+        WHERE ROWIDTOCHAR(ROWID) = :2
+    """
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(q, (correct_sql, row_id))
+            rowcount = cur.rowcount
+            conn.commit()
+            if rowcount <= 0:
+                return False, "대상 SQL Job을 찾지 못했습니다."
+            return True, f"{column} 저장 완료"
+    except Exception as exc:
+        return False, str(exc)

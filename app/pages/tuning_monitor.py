@@ -19,6 +19,15 @@ _COLS_TABLE = [
     "UPD_TS",
 ]
 
+_TUNING_DETAIL_OPTIONS = {
+    "TOBE SQL": "TO_SQL_TEXT",
+    "TUNED SQL": "TUNED_SQL",
+    "FORMATTED SQL": "FORMATTED_SQL",
+    "TUNED RESULT": "TUNED_RESULT",
+    "BLOCK RAG CONTENT": "BLOCK_RAG_CONTENT",
+    "LOG": "LOG",
+}
+
 
 def _label(row: pd.Series) -> str:
     namespace = row.get("SPACE_NM") or "-"
@@ -240,13 +249,21 @@ def render():
             label_visibility="collapsed",
         )
 
+    st.subheader("컬럼 비교")
+    detail_labels = list(_TUNING_DETAIL_OPTIONS.keys())
+    left_picker, right_picker = st.columns(2)
+    with left_picker:
+        left_label = st.selectbox("왼쪽 컬럼", detail_labels, index=0, key="tuning_monitor_left_col")
+    with right_picker:
+        right_label = st.selectbox("오른쪽 컬럼", detail_labels, index=1, key="tuning_monitor_right_col")
+
     c1, c2 = st.columns(2)
     with c1:
-        st.caption("TO_SQL_TEXT (튜닝 전)")
-        st.code(row.get("TO_SQL_TEXT") or "(없음)", language="sql")
+        st.caption(left_label)
+        st.code(row.get(_TUNING_DETAIL_OPTIONS[left_label]) or "(없음)", language="sql")
     with c2:
-        st.caption("TUNED_SQL (튜닝 후)")
-        st.code(row.get("TUNED_SQL") or "(없음)", language="sql")
+        st.caption(right_label)
+        st.code(row.get(_TUNING_DETAIL_OPTIONS[right_label]) or "(없음)", language="sql")
 
     c_test, c_log = st.columns(2)
     with c_test:

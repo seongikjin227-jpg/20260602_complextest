@@ -118,6 +118,12 @@ class SupervisorAgent:
                 chat_command, one_shot = _read_chat_command()
                 if chat_command:
                     human_content += f"\n\n[사용자 요청] {chat_command}\n위 요청을 이번 사이클에 반영하세요."
+                    if one_shot:
+                        human_content += (
+                            "\n이 요청은 one_shot=true 입니다. poll_jobs() 결과에서 요청 대상만 실행하고, "
+                            "다른 작업 유형은 실행하지 마세요. 작업 후 flush_cycle_metrics()를 호출한 뒤 "
+                            "request_wait() 없이 최종 응답하고 사이클을 끝내세요."
+                        )
                     logger.info(f"[Supervisor] 채팅 명령 수신 (one_shot={one_shot}): {chat_command}")
 
                 initial_state: SupervisorState = {

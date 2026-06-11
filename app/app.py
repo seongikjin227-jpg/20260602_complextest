@@ -16,7 +16,7 @@ st.set_page_config(
 
 from pages.dashboard import render as render_dashboard
 from pages.agent_metrics import render as render_metrics
-from pages.job_detail import render as render_job_detail
+from pages.correct_sql import render as render_correct_sql
 from pages.mig_monitor import render as render_mig
 from pages.rag_manager_page import render as render_rag
 from pages.settings_page import render as render_settings
@@ -32,7 +32,7 @@ _MENU = {
     "🗄️ Mig Agent Monitor": render_mig,
     "🧾 SQL Agent Monitor": render_sql,
     "⚡ Tuning Agent Monitor": render_tuning,
-    "🔎 Job Detail": render_job_detail,
+    "✅ Correct SQL Manager": render_correct_sql,
     "📚 Tuning Rule Manager": render_rag,
     "🩺 System Health": render_health,
     "⚙️ Settings": render_settings,
@@ -69,11 +69,11 @@ with st.sidebar:
     formatting_only = env.get("SQL_FORMATTING_ONLY", "false").lower() == "true"
     supervisor_mode = env.get("SUPERVISOR_MODE", "false").lower() == "true"
 
+    new_supervisor_mode = st.toggle("Supervisor", value=supervisor_mode, help="Supervisor 모드: AI가 실패 원인 분석 및 특정 작업 재실행을 지원합니다.")
     new_db_only = st.toggle("DB Migration", value=db_only)
     new_sql_only = st.toggle("SQL Conversion", value=sql_only)
     new_tuning_only = st.toggle("SQL Tuning", value=tuning_only)
     new_formatting_only = st.toggle("SQL Formatting", value=formatting_only)
-    new_supervisor_mode = st.toggle("Supervisor", value=supervisor_mode, help="Supervisor 모드: AI가 실패 원인 분석 및 특정 작업 재실행을 지원합니다.")
 
     if (new_db_only, new_sql_only, new_tuning_only, new_formatting_only, new_supervisor_mode) != (
         db_only,

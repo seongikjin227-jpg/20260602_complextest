@@ -689,8 +689,6 @@ def call_llm_text_api(
         except Exception as exc:
             message = str(exc)
             lowered = message.lower()
-            if "429" in message or "rate limit" in lowered or "504" in message or "gateway timeout" in lowered or "timed out" in lowered:
-                raise LLMRateLimitError(message) from exc
             if idx < len(candidates) - 1 and is_model_fallback_error(message):
                 logger.warning(
                     f"[LLM] model fallback: {candidate_model} failed ({message}); "
@@ -698,6 +696,8 @@ def call_llm_text_api(
                 )
                 last_exc = exc
                 continue
+            if "429" in message or "rate limit" in lowered or "504" in message or "gateway timeout" in lowered or "timed out" in lowered:
+                raise LLMRateLimitError(message) from exc
             raise
 
     if last_exc:
