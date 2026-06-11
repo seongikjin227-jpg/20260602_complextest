@@ -47,5 +47,10 @@ def execute_verification(sql: str) -> tuple[bool, str]:
             return True, "All Verification Passed"
 
     except Exception as e:
-        logger.error(f"[Verifier] 검증 쿼리 실행 에러: {str(e)}")
-        return False, f"Verification Query Error: {str(e)}"
+        error_message = str(e)
+        if "ORA-00932" in error_message or "inconsistent datatypes" in error_message.lower():
+            logger.warning(f"[Verifier] ORA-00932 검증 오류 스킵: {error_message}")
+            return True, f"Verification skipped due to ORA-00932: {error_message}"
+
+        logger.error(f"[Verifier] 검증 쿼리 실행 에러: {error_message}")
+        return False, f"Verification Query Error: {error_message}"

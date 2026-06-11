@@ -1,3 +1,6 @@
+import json
+import re
+
 import pandas as pd
 import streamlit as st
 
@@ -27,6 +30,107 @@ _TUNING_DETAIL_OPTIONS = {
     "BLOCK RAG CONTENT": "BLOCK_RAG_CONTENT",
     "LOG": "LOG",
 }
+
+_ALL_DETAIL_COLUMNS = "전체"
+_RAW_SQL_COLUMNS = {"FORMATTED_SQL"}
+_JSON_DETAIL_COLUMNS = {"BLOCK_RAG_CONTENT", "TUNED_RESULT"}
+
+_SQL_BREAK_KEYWORDS = (
+    "SELECT",
+    "INSERT INTO",
+    "UPDATE",
+    "DELETE FROM",
+    "FROM",
+    "WHERE",
+    "GROUP BY",
+    "ORDER BY",
+    "HAVING",
+    "UNION ALL",
+    "UNION",
+    "INNER JOIN",
+    "LEFT OUTER JOIN",
+    "RIGHT OUTER JOIN",
+    "FULL OUTER JOIN",
+    "LEFT JOIN",
+    "RIGHT JOIN",
+    "FULL JOIN",
+    "JOIN",
+    "AND",
+    "OR",
+    "VALUES",
+    "SET",
+)
+
+
+def _format_sql_for_display(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "(없음)"
+
+    compact = " ".join(text.replace("\r", "\n").split())
+    keyword_pattern = "|".join(
+        re.escape(keyword) for keyword in sorted(_SQL_BREAK_KEYWORDS, key=len, reverse=True)
+    )
+    compact = re.sub(
+        rf"(?i)\b({keyword_pattern})\b",
+        lambda match: f"\n{match.group(0).upper()}",
+        compact,
+    )
+
+    compact = compact.replace(", ", ",\n  ")
+    lines = [line.strip() for line in compact.splitlines() if line.strip()]
+    return "\n".join(lines) if lines else text
+
+
+def _format_json_for_display(value: object) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return "(없음)"
+    try:
+        return json.dumps(json.loads(text), ensure_ascii=False, indent=2)
+    except Exception:
+        return None
+
+
+def _format_detail_for_display(column: str, value: object) -> tuple[str, str]:
+    text = str(value or "").strip()
+    if not text:
+        return "(없음)", "text"
+    if column in _RAW_SQL_COLUMNS:
+        return text, "sql"
+    if column in _JSON_DETAIL_COLUMNS:
+        formatted_json = _format_json_for_display(text)
+        if formatted_json is not None:
+            return formatted_json, "json"
+    return _format_sql_for_display(text), "sql"
+
+
+def _selected_detail_labels(selected: list[str]) -> list[str]:
+    if _ALL_DETAIL_COLUMNS in selected:
+        return list(_TUNING_DETAIL_OPTIONS.keys())
+    return selected
+
+
+def _render_detail_stack(row: dict, labels: list[str], side: str) -> None:
+    if not labels:
+        st.info("선택된 컬럼 없음")
+        return
+
+    for label in labels:
+        column = _TUNING_DETAIL_OPTIONS[label]
+        value = row.get(column) or ""
+        st.caption(label)
+        if column == "LOG":
+            st.text_area(
+                f"{label} 내용",
+                value or "(없음)",
+                height=180,
+                label_visibility="collapsed",
+                key=f"tuning_monitor_detail_{side}_{label}",
+            )
+        else:
+            formatted, language = _format_detail_for_display(column, value)
+            st.code(formatted, language=language)
 
 
 def _label(row: pd.Series) -> str:
@@ -251,19 +355,28 @@ def render():
 
     st.subheader("컬럼 비교")
     detail_labels = list(_TUNING_DETAIL_OPTIONS.keys())
+    picker_options = [_ALL_DETAIL_COLUMNS] + detail_labels
     left_picker, right_picker = st.columns(2)
     with left_picker:
-        left_label = st.selectbox("왼쪽 컬럼", detail_labels, index=0, key="tuning_monitor_left_col")
+        left_labels = st.multiselect(
+            "왼쪽 컬럼",
+            picker_options,
+            default=["TOBE SQL"],
+            key="tuning_monitor_left_col",
+        )
     with right_picker:
-        right_label = st.selectbox("오른쪽 컬럼", detail_labels, index=1, key="tuning_monitor_right_col")
+        right_labels = st.multiselect(
+            "오른쪽 컬럼",
+            picker_options,
+            default=["TUNED SQL"],
+            key="tuning_monitor_right_col",
+        )
 
     c1, c2 = st.columns(2)
     with c1:
-        st.caption(left_label)
-        st.code(row.get(_TUNING_DETAIL_OPTIONS[left_label]) or "(없음)", language="sql")
+        _render_detail_stack(row, _selected_detail_labels(left_labels), "left")
     with c2:
-        st.caption(right_label)
-        st.code(row.get(_TUNING_DETAIL_OPTIONS[right_label]) or "(없음)", language="sql")
+        _render_detail_stack(row, _selected_detail_labels(right_labels), "right")
 
     c_test, c_log = st.columns(2)
     with c_test:

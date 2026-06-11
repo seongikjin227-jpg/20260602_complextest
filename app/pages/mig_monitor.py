@@ -1,3 +1,5 @@
+import re
+
 import streamlit as st
 import pandas as pd
 from utils.db import get_mig_jobs, get_mig_dtl, get_mig_logs
@@ -11,6 +13,77 @@ _MIG_DETAIL_OPTIONS = {
     "CORRECT SQL": "CORRECT_SQL",
     "LOG": "__LOG__",
 }
+
+_ALL_DETAIL_COLUMNS = "전체"
+
+_SQL_BREAK_KEYWORDS = (
+    "SELECT",
+    "INSERT INTO",
+    "UPDATE",
+    "DELETE FROM",
+    "FROM",
+    "WHERE",
+    "GROUP BY",
+    "ORDER BY",
+    "HAVING",
+    "UNION ALL",
+    "UNION",
+    "INNER JOIN",
+    "LEFT OUTER JOIN",
+    "RIGHT OUTER JOIN",
+    "FULL OUTER JOIN",
+    "LEFT JOIN",
+    "RIGHT JOIN",
+    "FULL JOIN",
+    "JOIN",
+    "AND",
+    "OR",
+    "VALUES",
+    "SET",
+)
+
+
+def _format_sql_for_display(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "(없음)"
+
+    compact = " ".join(text.replace("\r", "\n").split())
+    keyword_pattern = "|".join(
+        re.escape(keyword) for keyword in sorted(_SQL_BREAK_KEYWORDS, key=len, reverse=True)
+    )
+    compact = re.sub(
+        rf"(?i)\b({keyword_pattern})\b",
+        lambda match: f"\n{match.group(0).upper()}",
+        compact,
+    )
+
+    compact = compact.replace(", ", ",\n  ")
+    lines = [line.strip() for line in compact.splitlines() if line.strip()]
+    return "\n".join(lines) if lines else text
+
+
+def _selected_detail_labels(selected: list[str]) -> list[str]:
+    if _ALL_DETAIL_COLUMNS in selected:
+        return list(_MIG_DETAIL_OPTIONS.keys())
+    return selected
+
+
+def _render_detail_stack(row: dict, labels: list[str], logs: list[dict]) -> None:
+    if not labels:
+        st.info("선택된 컬럼 없음")
+        return
+
+    for label in labels:
+        column = _MIG_DETAIL_OPTIONS[label]
+        st.caption(label)
+        if column == "__LOG__":
+            if logs:
+                st.dataframe(pd.DataFrame(logs), width="stretch", hide_index=True)
+            else:
+                st.info("로그 없음")
+        else:
+            st.code(_format_sql_for_display(row.get(column)), language="sql")
 
 
 def render():
@@ -90,31 +163,30 @@ def render():
 
     st.subheader("컬럼 비교")
     detail_labels = list(_MIG_DETAIL_OPTIONS.keys())
+    picker_options = [_ALL_DETAIL_COLUMNS] + detail_labels
     left_picker, right_picker = st.columns(2)
     with left_picker:
-        left_label = st.selectbox("왼쪽 컬럼", detail_labels, index=0, key="mig_monitor_left_col")
+        left_labels = st.multiselect(
+            "왼쪽 컬럼",
+            picker_options,
+            default=["MIG SQL"],
+            key="mig_monitor_left_col",
+        )
     with right_picker:
-        right_label = st.selectbox("오른쪽 컬럼", detail_labels, index=1, key="mig_monitor_right_col")
+        right_labels = st.multiselect(
+            "오른쪽 컬럼",
+            picker_options,
+            default=["VERIFY SQL"],
+            key="mig_monitor_right_col",
+        )
 
     logs = get_mig_logs(map_id)
 
-    def _render_value(label: str):
-        column = _MIG_DETAIL_OPTIONS[label]
-        if column == "__LOG__":
-            if logs:
-                st.dataframe(pd.DataFrame(logs), width="stretch", hide_index=True)
-            else:
-                st.info("로그 없음")
-        else:
-            st.code(row.get(column) or "(없음)", language="sql")
-
     c_left, c_right = st.columns(2)
     with c_left:
-        st.caption(left_label)
-        _render_value(left_label)
+        _render_detail_stack(row, _selected_detail_labels(left_labels), logs)
     with c_right:
-        st.caption(right_label)
-        _render_value(right_label)
+        _render_detail_stack(row, _selected_detail_labels(right_labels), logs)
 
     with st.expander("컬럼 매핑 정보"):
         dtl = get_mig_dtl(map_id)
