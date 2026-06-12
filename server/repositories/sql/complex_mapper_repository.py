@@ -1,4 +1,4 @@
-"""Repository for NEXT_SQL_COMPLEX_MAP based complex SQL conversion rules."""
+"""Repository for NEXT_SQL_COMPLEX_MAP SQL conversion supplemental rules."""
 
 from __future__ import annotations
 
@@ -76,8 +76,8 @@ def _ensure_complex_map_table_exists() -> None:
 
     if not exists:
         raise RuntimeError(
-            "NEXT_SQL_COMPLEX_MAP table is required for SQL conversion map-type "
-            "classification. Run scripts/create_sql_complex_map_table.py first."
+            "NEXT_SQL_COMPLEX_MAP table is required for SQL conversion supplemental "
+            "mapping rules. Run scripts/create_sql_complex_map_table.py first."
         )
 
 
@@ -89,7 +89,7 @@ def _normalize_table_name(value: str | None) -> str:
 
 
 def has_complex_mapping_rules(target_table: str | None) -> bool:
-    """Return True when NEXT_SQL_COMPLEX_MAP has active rules for target table."""
+    """Return True when NEXT_SQL_COMPLEX_MAP has active rules for FR_TABLE."""
     _ensure_complex_map_table_exists()
     target = _normalize_table_name(target_table)
     if not target:
@@ -109,7 +109,7 @@ def has_complex_mapping_rules(target_table: str | None) -> bool:
 
 
 def get_complex_target_tables(target_tables: set[str]) -> set[str]:
-    """Return target tables that have active NEXT_SQL_COMPLEX_MAP rules."""
+    """Return target tables that have active NEXT_SQL_COMPLEX_MAP FR_TABLE rules."""
     _ensure_complex_map_table_exists()
     normalized_targets = {
         normalized
@@ -130,90 +130,59 @@ def get_complex_mapping_rules_for_job(
     job: SqlInfoJob,
     target_tables: set[str] | None = None,
     top_k: int | None = None,
-) -> tuple[list[ComplexMappingRuleItem], list[ComplexMappingRuleItem]]:
+) -> list[ComplexMappingRuleItem]:
     targets = {
         normalized
         for target in (target_tables or {job.target_table or ""})
         if (normalized := _normalize_table_name(target))
     }
     if not targets:
-        return [], []
+        return []
 
-    general_rules: list[ComplexMappingRuleItem] = []
+    selected_rules: list[ComplexMappingRuleItem] = []
+    per_table_top_k = top_k or _complex_search_top_k()
     for target in sorted(targets):
-        general_rules.extend(_fetch_complex_rules(target_table=target, map_kind="GENERAL"))
-
-    search_candidates = _fetch_search_complex_rules()
-
-    search_rules = _select_search_rules(
-        query_sql=job.source_sql,
-        candidates=search_candidates,
-        top_k=top_k or _complex_search_top_k(),
-    )
-    logger.info(
-        "[ComplexMapperRepository] complex rules loaded "
-        f"(target_tables={','.join(sorted(targets))}, general={len(general_rules)}, "
-        f"search_candidates={len(search_candidates)}, search_selected={len(search_rules)})"
-    )
-    return general_rules, search_rules
-
-
-def _fetch_complex_rules(target_table: str, map_kind: str) -> list[ComplexMappingRuleItem]:
-    _ensure_complex_map_table_exists()
-    table = _complex_map_table()
-    query = f"""
-        SELECT MAP_ID, MAP_KIND, FR_TABLE, FR_COL, TO_TABLE, TO_COL, DESCRIPTION
-        FROM {table}
-        WHERE USE_YN = 'Y'
-          AND MAP_KIND = :1
-          AND FR_TABLE = :2
-        ORDER BY MAP_ID
-    """
-
-    rules: list[ComplexMappingRuleItem] = []
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(query, [map_kind.strip().upper(), target_table])
-        for row in cursor.fetchall():
-            rules.append(
-                ComplexMappingRuleItem(
-                    map_id=int(row[0]),
-                    map_kind=_to_text(row[1]).strip().upper(),
-                    fr_table=_to_text(row[2]),
-                    fr_col=_to_text(row[3]),
-                    to_table=_to_text(row[4]),
-                    to_col=_to_text(row[5]),
-                    description=_to_text(row[6]),
-                )
+        candidates = _fetch_complex_rules(target_table=target)
+        selected_rules.extend(
+            _select_search_rules(
+                query_sql=job.source_sql,
+                candidates=candidates,
+                top_k=per_table_top_k,
             )
-    return rules
+        )
+
+    logger.info(
+        "[ComplexMapperRepository] supplemental rules loaded "
+        f"(target_tables={','.join(sorted(targets))}, selected={len(selected_rules)}, "
+        f"top_k_per_table={per_table_top_k})"
+    )
+    return selected_rules
 
 
-def _fetch_search_complex_rules() -> list[ComplexMappingRuleItem]:
+def _fetch_complex_rules(target_table: str) -> list[ComplexMappingRuleItem]:
     _ensure_complex_map_table_exists()
     table = _complex_map_table()
     query = f"""
-        SELECT MAP_ID, MAP_KIND, FR_TABLE, FR_COL, TO_TABLE, TO_COL, DESCRIPTION
+        SELECT MAP_ID, FR_TABLE, FR_COL, TO_TABLE, TO_COL, DESCRIPTION
         FROM {table}
         WHERE USE_YN = 'Y'
-          AND MAP_KIND = 'SEARCH'
+          AND FR_TABLE = :1
         ORDER BY MAP_ID
     """
 
     rules: list[ComplexMappingRuleItem] = []
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(query)
+        cursor.execute(query, [target_table])
         for row in cursor.fetchall():
             rules.append(
                 ComplexMappingRuleItem(
                     map_id=int(row[0]),
-                    map_kind=_to_text(row[1]).strip().upper(),
-                    fr_table=_to_text(row[2]),
-                    fr_col=_to_text(row[3]),
-                    to_table=_to_text(row[4]),
-                    to_col=_to_text(row[5]),
-                    description=_to_text(row[6]),
+                    fr_table=_to_text(row[1]),
+                    fr_col=_to_text(row[2]),
+                    to_table=_to_text(row[3]),
+                    to_col=_to_text(row[4]),
+                    description=_to_text(row[5]),
                 )
             )
     return rules
@@ -287,7 +256,6 @@ def _select_by_vector_search(
         selected.append(
             ComplexMappingRuleItem(
                 map_id=rule.map_id,
-                map_kind=rule.map_kind,
                 fr_table=rule.fr_table,
                 fr_col=rule.fr_col,
                 to_table=rule.to_table,
@@ -316,7 +284,6 @@ def _select_by_lexical_search(
         selected.append(
             ComplexMappingRuleItem(
                 map_id=rule.map_id,
-                map_kind=rule.map_kind,
                 fr_table=rule.fr_table,
                 fr_col=rule.fr_col,
                 to_table=rule.to_table,

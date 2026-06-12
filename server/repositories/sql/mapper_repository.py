@@ -9,7 +9,6 @@ from server.services.sql.db_runtime import (
     get_mapping_rule_table,
 )
 from server.services.sql.domain_models import MappingRuleItem
-from server.repositories.sql.complex_mapper_repository import has_complex_mapping_rules
 
 
 def _to_text(value, default: str = "") -> str:
@@ -95,13 +94,13 @@ def get_all_mapping_rules() -> list[MappingRuleItem]:
 
 
 def get_sql_map_type(target_table_value: str | None) -> str | None:
-    """Return COMPLEX when NEXT_SQL_COMPLEX_MAP has rules, otherwise SIMPLE."""
+    """Return SIMPLE when target tables are present.
+
+    SQL conversion no longer branches generation by complex mapping existence.
+    """
     target_tables = _parse_target_tables(target_table_value)
     if not target_tables:
         return None
-
-    if any(has_complex_mapping_rules(target_table) for target_table in target_tables):
-        return "COMPLEX"
     return "SIMPLE"
 
 
@@ -113,16 +112,7 @@ def get_unready_target_tables(target_table_value: str | None) -> list[str]:
 
 
 def get_unready_simple_target_tables(target_table_value: str | None) -> list[str]:
-    target_tables = _parse_target_tables(target_table_value)
-    if not target_tables:
-        return []
-
-    complex_target_tables = {
-        target_table
-        for target_table in target_tables
-        if has_complex_mapping_rules(target_table)
-    }
-    return _get_unready_target_tables(target_tables - complex_target_tables)
+    return get_unready_target_tables(target_table_value)
 
 
 def _get_unready_target_tables(target_tables: set[str]) -> list[str]:

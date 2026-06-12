@@ -63,6 +63,9 @@ def check_dependency_node(state: MigrationState) -> dict:
     dep_status = check_dependencies(job.map_id, job.to_table, job.priority)
 
     if dep_status != "READY":
+        if str(dep_status or "").strip().upper() == "FAIL":
+            logger.warning(f"[Graph:DEP] map_id={job.map_id} | 선행 작업 FAIL. 후속 작업을 SKIP 합니다.")
+            return {"status": "SKIP", "error_type": "DEPENDENCY_FAIL", "last_error": f"선행 작업 상태: {dep_status}"}
         logger.warning(f"[Graph:DEP] map_id={job.map_id} | 선행 작업 미통과 ({dep_status}). 다음 cycle까지 대기합니다.")
         return {"status": "WAITING", "error_type": "DEPENDENCY_WAIT", "last_error": f"선행 작업 상태: {dep_status}"}
 
@@ -160,6 +163,9 @@ def should_continue(state: MigrationState) -> Literal["generate", "finalize", "v
         return "finalize"
 
     if error_type == "DEPENDENCY_WAIT":
+        return "finalize"
+
+    if error_type == "DEPENDENCY_FAIL":
         return "finalize"
 
     if error_type == "LLM_RETRY":

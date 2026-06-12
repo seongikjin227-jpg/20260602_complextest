@@ -20,7 +20,7 @@ from server.core.llm_fallback import (
     set_active_model,
 )
 from server.core.logger import logger
-from server.repositories.sql.complex_mapper_repository import get_complex_mapping_rules_for_job, get_complex_target_tables
+from server.repositories.sql.complex_mapper_repository import get_complex_mapping_rules_for_job
 from server.repositories.sql.log_repository import insert_sql_log
 from server.services.sql.domain_models import ComplexMappingRuleItem, MappingRuleItem, SqlInfoJob
 from server.services.sql.prompt_service import build_prompt_messages
@@ -105,30 +105,18 @@ def _serialize_mapping_rules(mapping_rules: list[MappingRuleItem], section_name:
     return "\n".join(lines)
 
 
-def _serialize_next_sql_complex_mapping_rules(
-    simple_rules: list[MappingRuleItem],
-    general_rules: list[ComplexMappingRuleItem],
-    search_rules: list[ComplexMappingRuleItem],
+def _serialize_sql_conversion_mapping_rules(
+    migration_rules: list[MappingRuleItem],
+    supplemental_rules: list[ComplexMappingRuleItem],
 ) -> str:
     target_schema = _schema_env("ORACLE_SCHEMA_TGT")
-    sections = [_serialize_mapping_rules(simple_rules, section_name="SIMPLE_MAPPING_RULES"), ""]
-    sections.append("[COMPLEX_GENERAL_RULES]")
-    if not general_rules:
+    sections = [_serialize_mapping_rules(migration_rules, section_name="MIGRATION_MAPPING_RULES"), ""]
+    sections.append("[SQL_CONVERSION_SUPPLEMENTAL_RULES_TOP_3_BY_FR_TABLE]")
+    if not supplemental_rules:
         sections.append("- (empty)")
-    for rule in general_rules:
+    for rule in supplemental_rules:
         sections.extend(_format_complex_map_rule(rule, target_schema=target_schema))
-
     sections.append("")
-    sections.append("[COMPLEX_SEARCH_RULES_TOP_K]")
-    if not search_rules:
-        sections.append("- (empty)")
-    for rule in search_rules:
-        sections.extend(
-            _format_complex_map_rule(
-                rule,
-                target_schema=target_schema,
-            )
-        )
     return "\n".join(sections)
 
 
@@ -719,38 +707,24 @@ def generate_tobe_sql(
     mapping_rules: list[MappingRuleItem],
     last_error: str | None = None,
 ) -> str:
-    is_complex = (job.map_type or "").strip().upper() == "COMPLEX"
-    template_name = "tobe_sql_complex_prompt.json" if is_complex else "tobe_sql_prompt.json"
-
-    if is_complex:
-        target_tables = _load_target_tables(job)
-        complex_target_tables = get_complex_target_tables(target_tables)
-        simple_target_tables = target_tables - complex_target_tables
-        simple_rules = _select_mapping_rules_for_target_tables(
-            mapping_rules=mapping_rules,
-            target_tables=simple_target_tables,
-        )
-        general_rules, search_rules = get_complex_mapping_rules_for_job(
-            job,
-            target_tables=complex_target_tables,
-        )
-        mapping_schema_text = _serialize_next_sql_complex_mapping_rules(
-            simple_rules=simple_rules,
-            general_rules=general_rules,
-            search_rules=search_rules,
-        )
-    else:
-        scoped_rules = _select_mapping_rules_for_job(job=job, mapping_rules=mapping_rules)
-        mapping_schema_text = _serialize_mapping_rules(scoped_rules)
+    template_name = "tobe_sql_prompt.json"
+    scoped_rules = _select_mapping_rules_for_job(job=job, mapping_rules=mapping_rules)
+    supplemental_rules = get_complex_mapping_rules_for_job(
+        job,
+        target_tables=_load_target_tables(job),
+    )
+    mapping_schema_text = _serialize_sql_conversion_mapping_rules(
+        migration_rules=scoped_rules,
+        supplemental_rules=supplemental_rules,
+    )
 
     correct_sql_hint_json = "[]"
-    if not is_complex:
-        correct_sql_hints = correct_sql_hint_rag_service.retrieve_correct_sql_hints(
-            sql_text=job.source_sql,
-            correct_kind="TOBE",
-            current_row_id=job.row_id,
-        )
-        correct_sql_hint_json = serialize_correct_sql_hints_for_prompt(correct_sql_hints)
+    correct_sql_hints = correct_sql_hint_rag_service.retrieve_correct_sql_hints(
+        sql_text=job.source_sql,
+        correct_kind="TOBE",
+        current_row_id=job.row_id,
+    )
+    correct_sql_hint_json = serialize_correct_sql_hints_for_prompt(correct_sql_hints)
     return _call_llm_for_job(
         job=job,
         sql_kind="TOBE_SQL",

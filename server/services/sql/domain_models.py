@@ -54,10 +54,9 @@ class MappingRuleItem:
 
 @dataclass
 class ComplexMappingRuleItem:
-    """NEXT_SQL_COMPLEX_MAP row used by the complex SQL conversion flow."""
+    """NEXT_SQL_COMPLEX_MAP row used as supplemental SQL conversion guidance."""
 
     map_id: int
-    map_kind: str
     fr_table: str
     fr_col: str
     to_table: str

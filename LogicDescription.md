@@ -770,42 +770,24 @@ TobeSqlGenerationAgent.generate(state)
 
 ```text
 generate_tobe_sql(job, mapping_rules, last_error)
-  -> job.map_type 확인
-  -> job.map_type == "COMPLEX":
-       template = tobe_sql_complex_prompt.json
-       target_tables = TARGET_TABLE token 목록
-       complex_target_tables =
-          NEXT_SQL_COMPLEX_MAP에 USE_YN='Y' AND FR_TABLE=target_table인 table 목록
-       simple_target_tables =
-          target_tables - complex_target_tables
-       simple_rules =
-          NEXT_MIG_INFO / NEXT_MIG_INFO_DTL 중 simple_target_tables에 해당하는 기존 mapping
-       get_complex_mapping_rules_for_job(job, complex_target_tables)
-          -> GENERAL:
-               NEXT_SQL_COMPLEX_MAP
-               WHERE USE_YN='Y'
-                 AND MAP_KIND='GENERAL'
-                 AND FR_TABLE IN complex_target_tables
-               전체 조회
-          -> SEARCH:
-               NEXT_SQL_COMPLEX_MAP
-               WHERE USE_YN='Y'
-                 AND MAP_KIND='SEARCH'
-               전체 활성 SEARCH 후보 조회
-               query SQL = EDIT_FR_SQL if present else FR_SQL_TEXT
-               embedding target = FR_COL only
-               top-k = COMPLEX_MAP_SEARCH_TOP_K, default 3
-       mapping_schema_text =
-          [SIMPLE_MAPPING_RULES]
-          [COMPLEX_GENERAL_RULES]
-          [COMPLEX_SEARCH_RULES_TOP_K]
-       correct_sql_hint_json = "[]"
-  -> job.map_type != "COMPLEX":
-       template = tobe_sql_prompt.json
-       _select_mapping_rules_for_job(job, mapping_rules)
-       mapping_schema_text = _serialize_mapping_rules(scoped_rules)
-       correct_sql_hints = correct_sql_hint_rag_service.retrieve_correct_sql_hints(kind=TOBE)
-       correct_sql_hint_json = serialize_correct_sql_hints_for_prompt(correct_sql_hints)
+  -> template = tobe_sql_prompt.json
+  -> target_tables = TARGET_TABLE token 목록
+  -> _select_mapping_rules_for_job(job, mapping_rules)
+       NEXT_MIG_INFO / NEXT_MIG_INFO_DTL 중 TARGET_TABLE과 FR_TABLE이 매칭되는 기본 mapping 선택
+  -> get_complex_mapping_rules_for_job(job, target_tables)
+       for each target_table:
+          NEXT_SQL_COMPLEX_MAP
+          WHERE USE_YN='Y'
+            AND FR_TABLE = target_table
+          후보 조회
+          query SQL = EDIT_FR_SQL if present else FR_SQL_TEXT
+          embedding target = FR_COL only
+          top-k = COMPLEX_MAP_SEARCH_TOP_K, default 3
+  -> mapping_schema_text =
+       [MIGRATION_MAPPING_RULES]
+       [SQL_CONVERSION_SUPPLEMENTAL_RULES_TOP_3_BY_FR_TABLE]
+  -> correct_sql_hints = correct_sql_hint_rag_service.retrieve_correct_sql_hints(kind=TOBE)
+  -> correct_sql_hint_json = serialize_correct_sql_hints_for_prompt(correct_sql_hints)
   -> prompt payload:
        from_sql
        mapping_schema_text
@@ -819,15 +801,15 @@ Complex mapping 처리:
 
 ```text
 NEXT_SQL_COMPLEX_MAP:
-  FR_TABLE = TARGET_TABLE과 비교되는 실제 table명
+  SQL Conversion 전용 보조 매핑룰 저장소
+  MAP_KIND / GENERAL / SEARCH 구분 없음
+  FR_TABLE = NEXT_SQL_INFO.TARGET_TABLE과 비교되는 실제 table명
   FR_COL = 단일 source column 또는 AS-IS SQL pattern
   TO_TABLE = TO-BE table명
   TO_COL = 단일 TO-BE column 또는 TO-BE SQL pattern
-  SIMPLE_MAPPING_RULES = complex table에 없는 target table의 기존 NEXT_MIG_INFO mapping
-  COMPLEX_GENERAL_RULES = complex table에 있는 target table의 GENERAL rule 전부
-  COMPLEX_SEARCH_RULES_TOP_K = FR_TABLE과 무관하게 전체 활성 SEARCH rule 중 FR_COL 기준 vector search top-k
-  MAP_ID, MAP_KIND, 검색 점수, DESCRIPTION은 prompt에 전달하지 않음
-  correct SQL hint는 제외
+  SQL_CONVERSION_SUPPLEMENTAL_RULES_TOP_3_BY_FR_TABLE =
+    TARGET_TABLE별 FR_TABLE 일치 후보 안에서 FR_COL 기준 vector search top-k
+  MAP_ID, 검색 점수, DESCRIPTION은 prompt에 전달하지 않음
 ```
 
 Simple mapping 처리:
