@@ -12,8 +12,22 @@ def ensure_str(val):
         return val.read()
     return val
 
+_STATUS_PRIORITY = {
+    "URGENT": 0,
+    "READY": 1,
+    "FAIL": 2,
+    "PENDING": 3,
+    "": 4,
+}
+
+def _job_sort_key(job: MappingRule):
+    status = (job.status or "").strip().upper()
+    status_rank = _STATUS_PRIORITY.get(status, 9)
+    priority = job.priority if job.priority is not None else 999999999
+    return (priority, status_rank)
+
 def get_pending_jobs() -> list[MappingRule]:
-    """USE_YN='Y' 이고 TASK_TARGET IS NOT NULL인 작업을 PRIORITY 순으로 가져옵니다."""
+    """USE_YN='Y' 이고 TARGET_YN IS NOT NULL인 작업을 PRIORITY 순으로 가져옵니다."""
     logger.debug("[Repository] DB에서 작업 대상을 스캔합니다...")
     jobs = {}
     map_table = get_mapping_rule_table()
@@ -31,7 +45,16 @@ def get_pending_jobs() -> list[MappingRule]:
         LEFT JOIN {detail_table} D ON R.MAP_ID = D.MAP_ID
         WHERE R.USE_YN = 'Y'
           AND R.TARGET_YN IS NOT NULL
-        ORDER BY R.PRIORITY ASC, D.FR_COL ASC
+        ORDER BY
+            R.PRIORITY ASC,
+            CASE UPPER(TRIM(R.STATUS))
+                WHEN 'URGENT' THEN 1
+                WHEN 'READY' THEN 2
+                WHEN 'FAIL' THEN 3
+                WHEN 'PENDING' THEN 4
+                ELSE 5
+            END ASC,
+            D.FR_COL ASC
     """
 
     try:
@@ -78,7 +101,7 @@ def get_pending_jobs() -> list[MappingRule]:
     except Exception as e:
         logger.error(f"[Repository] 작업 대상을 조회하는 중 오류 발생: {e}")
 
-    return list(jobs.values())
+    return sorted(jobs.values(), key=_job_sort_key)
 
 def increment_batch_count(map_id: int):
     logger.debug(f"[Repository] map_id={map_id} | BATCH_CNT +1")

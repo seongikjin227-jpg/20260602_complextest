@@ -142,6 +142,37 @@ def _classify_sql_fail_log(log_text: str) -> str:
         return "OTHER_ERROR"
     return "NO_LOG"
 
+def _classify_fail_stage(row: dict, agent: str) -> str:
+    text = " ".join(
+        str(row.get(key) or "")
+        for key in ("LOG", "STATUS", "TUNED_TEST")
+    ).upper()
+    agent_key = (agent or "").upper()
+
+    if "TUNING" in agent_key:
+        patterns = [
+            ("TUNING_TEST", ["TUNED_TEST", "TEST_VALIDATION", "VALIDATION_FAIL", "BASELINE_COUNT", "TUNED_COUNT"]),
+            ("TUNING_SQL_GENERATION", ["TUNED_SQL", "GENERATE_TUNED_SQL", "TUNING_ERROR"]),
+            ("TUNING_LLM_RESPONSE", ["LLM", "MODEL", "JSON", "RESPONSE", "PARSE"]),
+            ("TUNING_BIND_OR_PARAM", ["BIND", "ORA-01008", "ORA-01036"]),
+            ("TUNING_DB_EXECUTION", ["ORA-", "SQL EXEC", "DATABASE", "QUERY"]),
+        ]
+    else:
+        patterns = [
+            ("TEST_SQL_VALIDATION", ["TEST_SQL", "TEST_VALIDATION", "VALIDATION_FAIL", "BASELINE_COUNT", "FROM_COUNT", "TO_COUNT"]),
+            ("BIND_SQL_GENERATION", ["BIND_SQL", "BIND SET", "BIND_SET", "NO_BIND", "ORA-01008", "ORA-01036"]),
+            ("TOBE_SQL_GENERATION", ["TOBE_SQL", "TO_SQL", "GENERATE_TOBE", "CONVERSION"]),
+            ("LLM_RESPONSE_PARSE", ["LLM", "MODEL", "JSON", "RESPONSE", "PARSE_LLM"]),
+            ("DB_EXECUTION", ["ORA-", "SQL EXEC", "DATABASE", "QUERY"]),
+        ]
+
+    for label, needles in patterns:
+        if any(needle in text for needle in needles):
+            return label
+    if text.strip():
+        return "OTHER_STAGE"
+    return "NO_LOG"
+
 
 def _load_fail_analysis_hints(stage: str) -> list[dict]:
     try:
@@ -161,6 +192,7 @@ def _summarize_sql_fail_rows(rows: list[dict], stage: str) -> dict:
     map_kind_counts: Counter = Counter()
     length_counts: Counter = Counter()
     log_type_counts: Counter = Counter()
+    fail_stage_counts: Counter = Counter()
     status_counts: Counter = Counter()
     samples = []
 
@@ -170,6 +202,8 @@ def _summarize_sql_fail_rows(rows: list[dict], stage: str) -> dict:
         length_counts[_length_bucket(row)] += 1
         log_type = _classify_sql_fail_log(str(row.get("LOG") or ""))
         log_type_counts[log_type] += 1
+        fail_stage = _classify_fail_stage(row, stage)
+        fail_stage_counts[fail_stage] += 1
         status_counts[str(row.get("STATUS") or "NULL").strip() or "NULL"] += 1
         if len(samples) < 30:
             samples.append({
@@ -179,6 +213,7 @@ def _summarize_sql_fail_rows(rows: list[dict], stage: str) -> dict:
                 "length_bucket": _length_bucket(row),
                 "status": row.get("STATUS"),
                 "tuned_test": row.get("TUNED_TEST"),
+                "fail_stage": fail_stage,
                 "log_type": log_type,
                 "log": str(row.get("LOG") or "")[:800],
                 "upd_ts": row.get("UPD_TS"),
@@ -190,6 +225,7 @@ def _summarize_sql_fail_rows(rows: list[dict], stage: str) -> dict:
         "map_kind_counts": _top_counter(map_kind_counts),
         "length_counts": _top_counter(length_counts),
         "status_counts": _top_counter(status_counts),
+        "fail_stage_counts": _top_counter(fail_stage_counts),
         "log_type_counts": _top_counter(log_type_counts),
         "recent_samples": samples,
         "admin_fail_cause_hints": _load_fail_analysis_hints(stage),
@@ -283,7 +319,7 @@ _SUPERVISOR_TOOLS = [
             "name": "rerun_migration",
             "description": (
                 "Migration 작업을 즉시 재실행합니다. "
-                "NEXT_MIG_INFO에서 USE_YN='Y', STATUS=NULL, MIG_SQL=NULL, RETRY_COUNT=0으로 초기화하고 "
+                "NEXT_MIG_INFO에서 USE_YN='Y', STATUS='URGENT', MIG_SQL=NULL, RETRY_COUNT=0으로 초기화하고 "
                 "Supervisor를 즉시 깨워 처리하게 합니다. "
                 "사용자가 재실행을 요청할 때 사용하세요."
             ),
@@ -924,6 +960,55 @@ def _length_success_html(length_summary: dict[str, dict[str, int]]) -> str:
       <div class="rate-note">Length 기준: FR_SQL_TEXT ≤ 5000 and (EDIT_FR_SQL ≤ 5000 or EDIT_FR_SQL is NULL)</div>
     """
 
+def _counter_markdown(title: str, items: list[dict], total: int):
+    st.markdown(f"**{title}**")
+    if not items:
+        st.caption("데이터 없음")
+        return
+    for item in items[:8]:
+        name = str(item.get("name") or "UNKNOWN")
+        count = int(item.get("count") or 0)
+        pct = (count / total * 100) if total else 0
+        st.markdown(f"- `{name}`: {count}건 ({pct:.1f}%)")
+
+
+def _show_sql_fail_analysis_panel(agent: str, rows: list[dict]):
+    summary = _summarize_sql_fail_rows(rows, agent)
+    total = int(summary.get("total_fail_rows") or 0)
+    label = "SQL Conversion" if agent == "SQL_CONVERSION" else "SQL Tuning"
+
+    with st.expander(f"{label} FAIL 원인 통계", expanded=True):
+        if total <= 0:
+            st.caption("최근 FAIL 데이터가 없습니다.")
+            return
+        st.caption(f"최근 {total}건 기준")
+        _counter_markdown("Stage 분포", summary["fail_stage_counts"], total)
+        _counter_markdown("LOG 유형", summary["log_type_counts"], total)
+        _counter_markdown("SQL 길이", summary["length_counts"], total)
+        _counter_markdown("MAP_TYPE/TAG_KIND", summary["map_kind_counts"], total)
+
+        samples = summary.get("recent_samples") or []
+        if samples:
+            st.markdown("**최근 샘플**")
+            st.dataframe(
+                [
+                    {
+                        "SQL_ID": item.get("sql_id"),
+                        "SPACE_NM": item.get("space_nm"),
+                        "STAGE": item.get("fail_stage"),
+                        "LOG_TYPE": item.get("log_type"),
+                        "MAP": item.get("map_kind"),
+                        "LEN": item.get("length_bucket"),
+                        "UPD_TS": item.get("upd_ts"),
+                        "LOG": item.get("log"),
+                    }
+                    for item in samples[:12]
+                ],
+                hide_index=True,
+                width="stretch",
+                height=260,
+            )
+
 
 def _status_card(title: str, summary: dict, extra_html: str = ""):
     normalized_summary: dict[str, int] = {}
@@ -1161,15 +1246,37 @@ def render():
         except Exception as e:
             st.error(str(e))
         try:
+            sql_status_summary = get_sql_status_summary()
             _status_card(
                 "🔄 SQL",
-                get_sql_status_summary(),
+                sql_status_summary,
                 extra_html=_length_success_html(get_sql_length_success_summary()),
             )
+            if int(sql_status_summary.get("FAIL", 0) or 0) > 0:
+                if st.button("SQL FAIL 원인 통계", width="stretch", key="right_sql_fail_analysis"):
+                    st.session_state.right_fail_analysis = "SQL_CONVERSION"
         except Exception as e:
             st.error(str(e))
         try:
-            _status_card("⚡ Tuning", get_tuning_status_summary())
+            tuning_status_summary = get_tuning_status_summary()
+            _status_card("⚡ Tuning", tuning_status_summary)
+            if int(tuning_status_summary.get("FAIL", 0) or 0) > 0:
+                if st.button("Tuning FAIL 원인 통계", width="stretch", key="right_tuning_fail_analysis"):
+                    st.session_state.right_fail_analysis = "SQL_TUNING"
+        except Exception as e:
+            st.error(str(e))
+        try:
+            selected_analysis = st.session_state.get("right_fail_analysis")
+            if selected_analysis == "SQL_CONVERSION":
+                _show_sql_fail_analysis_panel(
+                    "SQL_CONVERSION",
+                    get_sql_conversion_failure_analysis_rows(limit=200),
+                )
+            elif selected_analysis == "SQL_TUNING":
+                _show_sql_fail_analysis_panel(
+                    "SQL_TUNING",
+                    get_sql_tuning_failure_analysis_rows(limit=200),
+                )
         except Exception as e:
             st.error(str(e))
         try:

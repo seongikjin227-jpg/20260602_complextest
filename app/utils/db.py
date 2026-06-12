@@ -513,11 +513,11 @@ def get_recent_sql_stage_logs(limit: int = 100) -> list[dict]:
 # ── Re-run / 재실행 DB 초기화 ────────────────────────────────────────────────
 
 def reset_mig_job_for_rerun(map_id: int) -> bool:
-    """Migration 작업을 재실행 가능 상태로 초기화합니다 (USE_YN='Y', STATUS/MIG_SQL 초기화)."""
+    """Migration 작업을 최우선 재실행 가능 상태로 초기화합니다."""
     q = f"""
         UPDATE {MIG_TABLE}
         SET USE_YN = 'Y',
-            STATUS = NULL,
+            STATUS = 'URGENT',
             RETRY_COUNT = 0,
             MIG_SQL = NULL,
             UPD_TS = CURRENT_TIMESTAMP
@@ -726,7 +726,7 @@ def get_sql_tuning_failure_analysis_rows(limit: int = 200) -> list[dict]:
 
 # ── 작업 완료 대기 (챗봇 재실행 후 결과 반환용) ──────────────────────────────────
 
-_MIG_RUNNING  = {"", "RUNNING"}
+_MIG_RUNNING  = {"", "RUNNING", "URGENT", "READY", "PENDING"}
 _SQL_RUNNING  = {"URGENT", "RUNNING", ""}
 
 def poll_mig_job_result(map_id: int, timeout_sec: int = 300, interval: float = 3.0) -> dict:

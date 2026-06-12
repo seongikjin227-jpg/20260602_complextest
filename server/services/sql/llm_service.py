@@ -12,7 +12,13 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from server.core.exceptions import LLMRateLimitError
-from server.core.llm_fallback import get_active_model, is_model_fallback_error, model_candidates, set_active_model
+from server.core.llm_fallback import (
+    get_active_model,
+    is_model_fallback_error,
+    model_candidates,
+    reset_active_model,
+    set_active_model,
+)
 from server.core.logger import logger
 from server.repositories.sql.complex_mapper_repository import get_complex_mapping_rules_for_job, get_complex_target_tables
 from server.repositories.sql.log_repository import insert_sql_log
@@ -684,7 +690,10 @@ def call_llm_text_api(
                 text = "".join(item.get("text", "") if isinstance(item, dict) else str(item) for item in content)
             else:
                 text = str(content)
-            set_active_model(candidate_model)
+            if idx == len(candidates) - 1:
+                reset_active_model()
+            else:
+                set_active_model(candidate_model)
             return text
         except Exception as exc:
             message = str(exc)

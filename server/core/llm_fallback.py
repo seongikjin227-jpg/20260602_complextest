@@ -70,6 +70,19 @@ def is_model_fallback_error(message: str) -> bool:
     ):
         return True
 
+    server_error_patterns = (
+        "error code: 500",
+        "error code : 500",
+        "status code: 500",
+        "status code : 500",
+        "internal server error",
+        "server error",
+        "http 500",
+        " 500 ",
+    )
+    if any(pattern in text for pattern in server_error_patterns):
+        return True
+
     fatal_patterns = (
         "model not allow",
         "model_not_allow",

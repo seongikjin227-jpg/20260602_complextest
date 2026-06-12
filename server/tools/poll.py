@@ -32,6 +32,10 @@ from server.tools.context import (
 )
 
 JOB_BATCH_SIZE = 20
+MIGRATION_JOB_BATCH_SIZE = 1
+SQL_CONVERSION_JOB_BATCH_SIZE = 1
+SQL_TUNING_JOB_BATCH_SIZE = 1
+SQL_FORMATTING_JOB_BATCH_SIZE = 1
 
 
 def _agent_flags() -> tuple[bool, bool, bool, bool]:
@@ -125,13 +129,13 @@ def build_poll_jobs_tool(
         tuning_registry.clear()
         formatting_registry.clear()
 
-        for job in mig_jobs[:JOB_BATCH_SIZE]:
+        for job in mig_jobs[:MIGRATION_JOB_BATCH_SIZE]:
             mig_registry[job.map_id] = job
-        for job in sql_jobs[:JOB_BATCH_SIZE]:
+        for job in sql_jobs[:SQL_CONVERSION_JOB_BATCH_SIZE]:
             sql_registry[str(job.row_id)] = job
-        for job in tuning_jobs[:JOB_BATCH_SIZE]:
+        for job in tuning_jobs[:SQL_TUNING_JOB_BATCH_SIZE]:
             tuning_registry[str(job.row_id)] = job
-        for job in formatting_jobs[:JOB_BATCH_SIZE]:
+        for job in formatting_jobs[:SQL_FORMATTING_JOB_BATCH_SIZE]:
             formatting_registry[str(job.row_id)] = job
 
         result = {

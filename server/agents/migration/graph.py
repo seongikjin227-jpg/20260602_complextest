@@ -11,13 +11,18 @@ from server.core.exceptions import (
 from server.services.migration.llm_client import generate_sqls
 from server.agents.migration.executor import execute_migration, truncate_table
 from server.agents.migration.verifier import execute_verification
-from server.repositories.migration.repository import update_job_status, check_dependencies, is_first_job_for_target
+from server.repositories.migration.repository import (
+    update_job_status,
+    check_dependencies,
+    is_first_job_for_target,
+    increment_batch_count,
+)
 from server.repositories.migration.history_repository import log_generated_sql, log_business_history
 from server.core.db_migration import fetch_table_ddl, qualify_fr_table, qualify_to_table
 from server.agents.migration.state import MigrationState
 
 LLM_MAX_RETRY = 2
-BIZ_MAX_ATTEMPTS = 3
+BIZ_MAX_ATTEMPTS = 10
 
 def _extract_table_names(fr_table: str) -> list:
     """FR_TABLE 표현식에서 실제 테이블명만 추출합니다."""
@@ -58,9 +63,10 @@ def check_dependency_node(state: MigrationState) -> dict:
     dep_status = check_dependencies(job.map_id, job.to_table, job.priority)
 
     if dep_status != "READY":
-        logger.warning(f"[Graph:DEP] map_id={job.map_id} | 선행 작업 미통과 ({dep_status}). 작업을 SKIP 합니다.")
-        return {"status": "SKIP", "error_type": "DEPENDENCY_FAIL", "last_error": f"선행 작업 상태: {dep_status}"}
+        logger.warning(f"[Graph:DEP] map_id={job.map_id} | 선행 작업 미통과 ({dep_status}). 다음 cycle까지 대기합니다.")
+        return {"status": "WAITING", "error_type": "DEPENDENCY_WAIT", "last_error": f"선행 작업 상태: {dep_status}"}
 
+    increment_batch_count(job.map_id)
     return {"error_type": None}
 
 def generate_sql_node(state: MigrationState) -> dict:
@@ -136,6 +142,10 @@ def finalize_node(state: MigrationState) -> dict:
         log_business_history(job.map_id, "JOB_SKIP", "WARN", "DEP_CHECK", "SKIP", state["last_error"], state["db_attempts"], mig_kind)
         logger.warning(f"[Graph:FINISH] map_id={job.map_id} | >>> SKIP (의존성 실패) <<<")
         return {"elapsed_time": elapsed, "status": "SKIP"}
+    elif state["status"] == "WAITING":
+        log_business_history(job.map_id, "JOB_WAIT", "INFO", "DEP_CHECK", "WAITING", state["last_error"], state["db_attempts"], mig_kind)
+        logger.info(f"[Graph:FINISH] map_id={job.map_id} | >>> WAITING (의존성 대기) <<<")
+        return {"elapsed_time": elapsed, "status": "WAITING"}
     else:
         update_job_status(job.map_id, "FAIL", elapsed, state["db_attempts"])
         log_business_history(job.map_id, "JOB_FAIL", "ERROR", "FINAL", "FAIL", "Max Attempts Reached", state["db_attempts"], mig_kind)
@@ -146,10 +156,10 @@ def finalize_node(state: MigrationState) -> dict:
 def should_continue(state: MigrationState) -> Literal["generate", "finalize", "verify", "execute", "llm_retry_wait"]:
     error_type = state.get("error_type")
 
-    if state.get("status") in ("PASS", "SKIP"):
+    if state.get("status") in ("PASS", "SKIP", "WAITING"):
         return "finalize"
 
-    if error_type == "DEPENDENCY_FAIL":
+    if error_type == "DEPENDENCY_WAIT":
         return "finalize"
 
     if error_type == "LLM_RETRY":

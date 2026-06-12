@@ -9,7 +9,12 @@ from server.core.exceptions import (
     LLMConnectionError, LLMAuthenticationError,
     LLMRateLimitError, LLMInvalidRequestError, LLMServerError
 )
-from server.core.llm_fallback import is_model_fallback_error, model_candidates, set_active_model
+from server.core.llm_fallback import (
+    is_model_fallback_error,
+    model_candidates,
+    reset_active_model,
+    set_active_model,
+)
 from server.core.logger import logger
 from server.services.migration.prompt_service import build_migration_prompt
 from server.services.sql.db_runtime import qualify_fr_table, qualify_to_table
@@ -68,6 +73,8 @@ def _extract_anthropic_text(response) -> str:
 
 def _extract_json_object(text: str) -> dict:
     raw = (text or "").strip()
+    if not raw:
+        raise ValueError("LLM returned an empty migration response.")
     if raw.startswith("```"):
         raw = raw.strip("`").strip()
         if raw.lower().startswith("json"):
@@ -185,11 +192,14 @@ def generate_sqls(NEXT_SQL_INFO, last_error=None, last_sql=None, source_ddl=None
                             {"role": "system", "content": system_openai},
                             {"role": "user", "content": prompt}
                         ],
-                        response_format={"type": "json_object"}
                     )
-                    result = json.loads(response.choices[0].message.content)
+                    content = response.choices[0].message.content or ""
+                    result = _extract_json_object(content)
                 used_model = candidate_model
-                set_active_model(candidate_model)
+                if idx == len(candidates) - 1:
+                    reset_active_model()
+                else:
+                    set_active_model(candidate_model)
                 break
             except Exception as exc:
                 message = str(exc)
