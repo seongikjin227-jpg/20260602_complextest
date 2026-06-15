@@ -17,7 +17,6 @@ _SERVICE_DIR = Path(__file__).resolve().parent
 # unified_agent/ 프로젝트 루트 (.env 위치 기준)
 _PROJECT_ROOT = _SERVICE_DIR.parent.parent.parent
 DEFAULT_CATALOG_PATH = _SERVICE_DIR / "data" / "rag" / "tobe_rule_catalog.json"
-DEFAULT_UNIVERSAL_RULES_PATH = _SERVICE_DIR / "data" / "rules" / "universal_tuning_rules.json"
 load_dotenv(_PROJECT_ROOT / ".env")
 
 
@@ -25,8 +24,6 @@ class TobeSqlTuningService:
     def __init__(self) -> None:
         raw_path = os.getenv("TOBE_RULE_CATALOG_PATH", str(DEFAULT_CATALOG_PATH))
         self.catalog_path = self._resolve_path(raw_path)
-        raw_universal_path = os.getenv("UNIVERSAL_TUNING_RULES_PATH", str(DEFAULT_UNIVERSAL_RULES_PATH))
-        self.universal_rules_path = self._resolve_path(raw_universal_path)
         self.top_k = max(1, int(os.getenv("TOBE_SQL_TUNING_TOP_K", "3")))
         self.embed_base_url = os.getenv("RAG_EMBED_BASE_URL", "").strip()
         self.embed_api_key = os.getenv("RAG_EMBED_API_KEY", "").strip()
@@ -55,14 +52,12 @@ class TobeSqlTuningService:
 
     def load_universal_tuning_rules(self) -> list[dict[str, Any]]:
         try:
-            rules = self._load_universal_from_db()
-            if rules:
-                return rules
+            return self._load_universal_from_db()
         except Exception as exc:
             logger.warning(
-                f"[TobeSqlTuningService] DB GENERAL 룰 로드 실패, JSON fallback 사용 ({type(exc).__name__}: {exc})"
+                f"[TobeSqlTuningService] DB GENERAL rule load failed; skip universal rules ({type(exc).__name__}: {exc})"
             )
-        return self._load_universal_from_json()
+            return []
 
     def _retrieve_by_vector_search(
         self,
@@ -393,33 +388,6 @@ class TobeSqlTuningService:
                     "example_bad_sql": example_bad_sql,
                     "example_tuned_sql": str(row.get("example_tuned_sql", "")).strip(),
                     "normalized_bad_sql": self._normalize_sql_shape(example_bad_sql),
-                }
-            )
-        return result
-
-    def _load_universal_from_json(self) -> list[dict[str, Any]]:
-        if not self.universal_rules_path.exists():
-            logger.warning(f"[TobeSqlTuningService] universal rule file not found: {self.universal_rules_path}")
-            return []
-
-        raw = json.loads(self.universal_rules_path.read_text(encoding="utf-8"))
-        rows = raw.get("rules", raw if isinstance(raw, list) else [])
-        result: list[dict[str, Any]] = []
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            rule_id = str(row.get("rule_id", "")).strip()
-            guidance_raw = row.get("guidance", [])
-            guidance = [str(item) for item in guidance_raw] if isinstance(guidance_raw, list) else [str(guidance_raw)]
-            guidance = [item.strip() for item in guidance if item.strip()]
-            if not rule_id or not guidance:
-                continue
-            result.append(
-                {
-                    "rule_id": rule_id,
-                    "category": str(row.get("category", "universal")),
-                    "priority": str(row.get("priority", "mandatory")),
-                    "guidance": guidance,
                 }
             )
         return result

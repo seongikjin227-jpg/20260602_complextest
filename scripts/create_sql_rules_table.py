@@ -32,9 +32,6 @@ CREATE TABLE NEXT_SQL_RULES (
 RAG_PATH = (
     ROOT_DIR / "server" / "services" / "sql" / "data" / "rag" / "tobe_rule_catalog.json"
 )
-UNIVERSAL_PATH = (
-    ROOT_DIR / "server" / "services" / "sql" / "data" / "rules" / "universal_tuning_rules.json"
-)
 
 
 def table_exists(cur, table_name: str) -> bool:
@@ -66,7 +63,7 @@ def load_rules(path: Path, rule_type: str) -> list[dict]:
 
 
 def main():
-    rules = load_rules(RAG_PATH, "SEARCH") + load_rules(UNIVERSAL_PATH, "GENERAL")
+    rules = load_rules(RAG_PATH, "SEARCH")
 
     with get_connection() as conn:
         cur = conn.cursor()

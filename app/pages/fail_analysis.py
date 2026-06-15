@@ -23,6 +23,20 @@ _AGENT_OPTIONS = {
 _AGENT_LABELS = {value: label for label, value in _AGENT_OPTIONS.items()}
 
 
+def _metric_card(label: str, value: object, sub: str = "", compact: bool = False) -> None:
+    compact_cls = " fail-metric-compact" if compact else ""
+    st.markdown(
+        f"""
+        <div class="fail-metric{compact_cls}">
+          <div class="fail-metric-label">{label}</div>
+          <div class="fail-metric-value">{value}</div>
+          <div class="fail-metric-sub">{sub}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _default_agent_index() -> int:
     agent = st.query_params.get("agent", "SQL_CONVERSION")
     values = list(_AGENT_OPTIONS.values())
@@ -48,12 +62,15 @@ def _render_summary(agent: str, limit: int) -> None:
         st.info("최근 FAIL 데이터가 없습니다.")
         return
 
-    m1, m2, m3 = st.columns(3)
-    m1.metric("FAIL", total)
     top_stage = (summary.get("fail_stage_counts") or [{}])[0]
     top_log = (summary.get("log_type_counts") or [{}])[0]
-    m2.metric("최다 Stage", top_stage.get("name", "-"), f"{top_stage.get('count', 0)}건")
-    m3.metric("최다 LOG 유형", top_log.get("name", "-"), f"{top_log.get('count', 0)}건")
+    m1, m2, m3 = st.columns([0.62, 1.15, 1.23], gap="medium")
+    with m1:
+        _metric_card("FAIL", total, "건", compact=True)
+    with m2:
+        _metric_card("최다 Stage", top_stage.get("name", "-"), f"{top_stage.get('count', 0)}건")
+    with m3:
+        _metric_card("최다 LOG 유형", top_log.get("name", "-"), f"{top_log.get('count', 0)}건")
 
     c1, c2 = st.columns(2)
     with c1:
@@ -171,10 +188,55 @@ def _render_chat(agent: str) -> None:
 
 
 def render():
+    st.markdown(
+        """
+        <style>
+        .fail-metric {
+            min-height: 104px;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            background: #ffffff;
+            padding: 14px 14px 12px 14px;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+        .fail-metric-compact {
+            padding-left: 12px;
+            padding-right: 12px;
+        }
+        .fail-metric-label {
+            font-size: 12px;
+            line-height: 1.25;
+            color: #6b7280;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+        .fail-metric-value {
+            font-size: 22px;
+            line-height: 1.22;
+            color: #111827;
+            font-weight: 800;
+            letter-spacing: 0;
+        }
+        .fail-metric-sub {
+            min-height: 18px;
+            margin-top: 8px;
+            font-size: 12px;
+            line-height: 1.25;
+            color: #6b7280;
+        }
+        .fail-metric-compact .fail-metric-value {
+            font-size: 30px;
+            line-height: 1.1;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     st.markdown("## FAIL Analysis")
     st.caption("SQL Conversion / SQL Tuning 실패 원인을 stage, log, 길이, 유형별로 크게 확인합니다.")
 
-    top = st.columns([2, 1, 1])
+    top = st.columns([2.3, 0.95, 0.8], gap="large")
     with top[0]:
         agent_label = st.radio(
             "분석 대상",
@@ -185,8 +247,11 @@ def render():
     with top[1]:
         limit = st.number_input("분석 건수", min_value=50, max_value=1000, value=200, step=50)
     with top[2]:
+        st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
         if st.button("새로고침", width="stretch"):
             st.rerun()
+
+    st.markdown("<div style='height: 8px'></div>", unsafe_allow_html=True)
 
     agent = _AGENT_OPTIONS[agent_label]
     st.query_params["agent"] = agent

@@ -1041,17 +1041,9 @@ def _status_card(title: str, summary: dict, extra_html: str = ""):
         cls = _CLR.get(k, "badge-etc")
         col_label, col_val = st.columns([2.2, 1])
         with col_label:
-            if k == "FAIL" and int(v or 0) > 0 and ("SQL" in title or "Tuning" in title):
-                agent = "SQL_CONVERSION" if "SQL" in title else "SQL_TUNING"
-                if st.button(f"{icon} FAIL {v}", key=f"status_fail_{agent}_{title}", type="secondary"):
-                    st.query_params["page"] = "🔎 Fail Analysis"
-                    st.query_params["agent"] = agent
-                    st.rerun()
-            else:
-                st.markdown(f"<span class='stat-label'>{icon} {k}</span>", unsafe_allow_html=True)
+            st.markdown(f"<span class='stat-label'>{icon} {k}</span>", unsafe_allow_html=True)
         with col_val:
-            if not (k == "FAIL" and int(v or 0) > 0 and ("SQL" in title or "Tuning" in title)):
-                st.markdown(f"<span class='stat-val {cls}'>{v}</span>", unsafe_allow_html=True)
+            st.markdown(f"<span class='stat-val {cls}'>{v}</span>", unsafe_allow_html=True)
 
 
 def _formatting_card(summary: dict):
