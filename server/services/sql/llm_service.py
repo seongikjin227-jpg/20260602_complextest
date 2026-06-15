@@ -111,7 +111,7 @@ def _serialize_sql_conversion_mapping_rules(
 ) -> str:
     target_schema = _schema_env("ORACLE_SCHEMA_TGT")
     sections = [_serialize_mapping_rules(migration_rules, section_name="MIGRATION_MAPPING_RULES"), ""]
-    sections.append("[SQL_CONVERSION_SUPPLEMENTAL_RULES_TOP_3_BY_FR_TABLE]")
+    sections.append("[SQL_CONVERSION_SUPPLEMENTAL_RULES_EXACT_ALL_AND_OTHER_TOP_K]")
     if not supplemental_rules:
         sections.append("- (empty)")
     for rule in supplemental_rules:

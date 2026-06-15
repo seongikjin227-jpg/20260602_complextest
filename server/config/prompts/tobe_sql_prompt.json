@@ -12,7 +12,7 @@
     "rules": [
         "모든 SQL은 Oracle 19c 버전 문법에 맞게 생성하거나 수정하십시오.",
         "mapping_schema_text의 [MIGRATION_MAPPING_RULES]는 NEXT_MIG_INFO/NEXT_MIG_INFO_DTL에서 가져온 기본 매핑룰이며 가장 우선적인 기준으로 사용하십시오.",
-        "mapping_schema_text의 [SQL_CONVERSION_SUPPLEMENTAL_RULES_TOP_3_BY_FR_TABLE]는 NEXT_SQL_COMPLEX_MAP에서 FR_TABLE별 RAG 검색으로 선택된 SQL Conversion 전용 보조 매핑룰입니다.",
+        "mapping_schema_text의 [SQL_CONVERSION_SUPPLEMENTAL_RULES_EXACT_ALL_AND_OTHER_TOP_K]는 NEXT_SQL_COMPLEX_MAP에서 TARGET_TABLE과 FR_TABLE이 일치하는 룰 전체와, 다른 FR_TABLE 후보 중 RAG 검색으로 선택된 SQL Conversion 전용 보조 매핑룰입니다.",
         "보조 매핑룰은 기본 매핑룰만으로 표현하기 어려운 SQL 패턴 변환 근거로 사용하되, 기본 매핑룰과 충돌하면 기본 매핑룰을 우선하십시오.",
         "가능한 한 원본 쿼리 구조, 필터 의도, 집계 의도, 조인 의도, MyBatis 동적 태그, 바인드 파라미터명을 보존하십시오.",
         "MyBatis 바인딩 파라미터 태그(#{{param}}, ${{param}})는 제거하거나 값으로 치환하지 말고, 원본의 파라미터명과 태그 형식을 그대로 유지하십시오.",

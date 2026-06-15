@@ -31,11 +31,19 @@ from server.tools.context import (
     tuning_registry,
 )
 
-JOB_BATCH_SIZE = 20
-MIGRATION_JOB_BATCH_SIZE = 1
-SQL_CONVERSION_JOB_BATCH_SIZE = 1
-SQL_TUNING_JOB_BATCH_SIZE = 1
-SQL_FORMATTING_JOB_BATCH_SIZE = 1
+
+def _env_int(name: str, default: int, minimum: int = 1) -> int:
+    try:
+        return max(minimum, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+JOB_BATCH_SIZE = _env_int("SUPERVISOR_JOB_BATCH_SIZE", 20)
+MIGRATION_JOB_BATCH_SIZE = _env_int("MIGRATION_JOB_BATCH_SIZE", 1)
+SQL_CONVERSION_JOB_BATCH_SIZE = _env_int("SQL_CONVERSION_JOB_BATCH_SIZE", 1)
+SQL_TUNING_JOB_BATCH_SIZE = _env_int("SQL_TUNING_JOB_BATCH_SIZE", 1)
+SQL_FORMATTING_JOB_BATCH_SIZE = _env_int("SQL_FORMATTING_JOB_BATCH_SIZE", 1)
 
 
 def _agent_flags() -> tuple[bool, bool, bool, bool]:

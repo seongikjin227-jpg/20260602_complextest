@@ -140,23 +140,31 @@ def get_complex_mapping_rules_for_job(
         return []
 
     selected_rules: list[ComplexMappingRuleItem] = []
-    per_table_top_k = top_k or _complex_search_top_k()
+    exact_rules: list[ComplexMappingRuleItem] = []
     for target in sorted(targets):
-        candidates = _fetch_complex_rules(target_table=target)
+        exact_rules.extend(_fetch_complex_rules(target_table=target))
+
+    if _include_exact_match_rules():
+        selected_rules.extend(exact_rules)
+
+    other_top_k = top_k or _complex_other_top_k()
+    other_candidates = _fetch_complex_rules_excluding(target_tables=targets)
+    if other_top_k > 0:
         selected_rules.extend(
             _select_search_rules(
                 query_sql=job.source_sql,
-                candidates=candidates,
-                top_k=per_table_top_k,
+                candidates=other_candidates,
+                top_k=other_top_k,
             )
         )
 
     logger.info(
         "[ComplexMapperRepository] supplemental rules loaded "
-        f"(target_tables={','.join(sorted(targets))}, selected={len(selected_rules)}, "
-        f"top_k_per_table={per_table_top_k})"
+        f"(target_tables={','.join(sorted(targets))}, exact={len(exact_rules)}, "
+        f"other_candidates={len(other_candidates)}, other_top_k={other_top_k}, "
+        f"selected={len(selected_rules)})"
     )
-    return selected_rules
+    return _dedupe_rules(selected_rules)
 
 
 def _fetch_complex_rules(target_table: str) -> list[ComplexMappingRuleItem]:
@@ -188,11 +196,63 @@ def _fetch_complex_rules(target_table: str) -> list[ComplexMappingRuleItem]:
     return rules
 
 
-def _complex_search_top_k() -> int:
+def _fetch_complex_rules_excluding(target_tables: set[str]) -> list[ComplexMappingRuleItem]:
+    _ensure_complex_map_table_exists()
+    table = _complex_map_table()
+    query = f"""
+        SELECT MAP_ID, FR_TABLE, FR_COL, TO_TABLE, TO_COL, DESCRIPTION
+        FROM {table}
+        WHERE USE_YN = 'Y'
+        ORDER BY MAP_ID
+    """
+
+    excluded = {_normalize_table_name(target) for target in target_tables if target}
+    rules: list[ComplexMappingRuleItem] = []
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(query)
+        for row in cursor.fetchall():
+            fr_table = _to_text(row[1])
+            if _normalize_table_name(fr_table) in excluded:
+                continue
+            rules.append(
+                ComplexMappingRuleItem(
+                    map_id=int(row[0]),
+                    fr_table=fr_table,
+                    fr_col=_to_text(row[2]),
+                    to_table=_to_text(row[3]),
+                    to_col=_to_text(row[4]),
+                    description=_to_text(row[5]),
+                )
+            )
+    return rules
+
+
+def _include_exact_match_rules() -> bool:
+    return os.getenv("COMPLEX_MAP_EXACT_MATCH_INCLUDE_ALL", "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+    }
+
+
+def _complex_other_top_k() -> int:
     try:
-        return max(1, int(os.getenv("COMPLEX_MAP_SEARCH_TOP_K", "3")))
+        return max(0, int(os.getenv("COMPLEX_MAP_OTHER_TOP_K", "2")))
     except ValueError:
-        return 3
+        return 2
+
+
+def _dedupe_rules(rules: list[ComplexMappingRuleItem]) -> list[ComplexMappingRuleItem]:
+    deduped: list[ComplexMappingRuleItem] = []
+    seen: set[int] = set()
+    for rule in rules:
+        if rule.map_id in seen:
+            continue
+        deduped.append(rule)
+        seen.add(rule.map_id)
+    return deduped
 
 
 def _select_search_rules(

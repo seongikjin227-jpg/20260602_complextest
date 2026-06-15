@@ -21,8 +21,16 @@ from server.repositories.migration.history_repository import log_generated_sql, 
 from server.core.db_migration import fetch_table_ddl, qualify_fr_table, qualify_to_table
 from server.agents.migration.state import MigrationState
 
-LLM_MAX_RETRY = 2
-BIZ_MAX_ATTEMPTS = 10
+
+def _env_int(name: str, default: int, minimum: int = 0) -> int:
+    try:
+        return max(minimum, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+LLM_MAX_RETRY = _env_int("DB_MIGRATION_LLM_MAX_RETRY", 2)
+BIZ_MAX_ATTEMPTS = _env_int("DB_MIGRATION_MAX_ATTEMPTS", 10, minimum=1)
 
 def _extract_table_names(fr_table: str) -> list:
     """FR_TABLE 표현식에서 실제 테이블명만 추출합니다."""

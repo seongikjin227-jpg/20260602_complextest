@@ -20,6 +20,11 @@ from server.config.settings import (
     LLM_MAX_TOKENS,
     LLM_MODEL,
 )
+from server.core.llm_fallback import (
+    is_model_fallback_error,
+    model_candidates,
+    set_active_model,
+)
 from server.tools.context import _stop_event, init_callbacks
 from server.tools.cycle import flush_cycle_metrics, request_wait
 from server.tools.migration import run_data_migration
@@ -29,9 +34,9 @@ from server.tools.sql_formatting import run_sql_formatting
 from server.tools.sql_tuning import run_sql_tuning
 
 
-def _build_llm() -> ChatOpenAI:
+def _build_llm(model_name: str) -> ChatOpenAI:
     kwargs: dict = {
-        "model": LLM_MODEL,
+        "model": model_name,
         "api_key": LLM_API_KEY,
         "max_tokens": LLM_MAX_TOKENS,
     }
@@ -80,8 +85,6 @@ def build_supervisor_graph(
         request_wait,
     ]
 
-    llm = _build_llm()
-    llm_with_tools = llm.bind_tools(tools)
     tool_node = ToolNode(tools)
 
     def supervisor_node(state: SupervisorState) -> dict:
@@ -89,8 +92,29 @@ def build_supervisor_graph(
             return {"stop_requested": True}
 
         messages = state.get("messages") or []
-        response = llm_with_tools.invoke(messages)
-        return {"messages": [response]}
+        candidates = model_candidates(LLM_MODEL)
+        last_exc: Exception | None = None
+
+        for idx, candidate_model in enumerate(candidates):
+            try:
+                llm_with_tools = _build_llm(candidate_model).bind_tools(tools)
+                response = llm_with_tools.invoke(messages)
+                set_active_model(candidate_model)
+                return {"messages": [response]}
+            except Exception as exc:
+                message = str(exc)
+                if idx < len(candidates) - 1 and is_model_fallback_error(message):
+                    logger.warning(
+                        f"[Supervisor LLM] model fallback: {candidate_model} failed ({message}); "
+                        f"trying {candidates[idx + 1]}"
+                    )
+                    last_exc = exc
+                    continue
+                raise
+
+        if last_exc:
+            raise last_exc
+        raise RuntimeError("No supervisor LLM model candidates are configured.")
 
     def route_after_supervisor(
         state: SupervisorState,

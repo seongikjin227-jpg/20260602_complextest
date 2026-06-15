@@ -142,7 +142,7 @@ poll_node(state)
       sql_registry.clear()
       tuning_registry.clear()
       formatting_registry.clear()
-  -> 각 job list에서 JOB_BATCH_SIZE=5개까지만 registry에 저장
+  -> 각 job list에서 *_JOB_BATCH_SIZE(.env) 개수만큼 registry에 저장
   -> 대기/실행 대상 건수 로그
   -> {"cycle": cycle, "stop_requested": False}
 ```
@@ -779,13 +779,17 @@ generate_tobe_sql(job, mapping_rules, last_error)
           NEXT_SQL_COMPLEX_MAP
           WHERE USE_YN='Y'
             AND FR_TABLE = target_table
-          후보 조회
+          일치 룰 전체 조회
+       other candidates:
+          NEXT_SQL_COMPLEX_MAP
+          WHERE USE_YN='Y'
+            AND FR_TABLE NOT IN target_tables
           query SQL = EDIT_FR_SQL if present else FR_SQL_TEXT
           embedding target = FR_COL only
-          top-k = COMPLEX_MAP_SEARCH_TOP_K, default 3
+          top-k = COMPLEX_MAP_OTHER_TOP_K, default 2
   -> mapping_schema_text =
        [MIGRATION_MAPPING_RULES]
-       [SQL_CONVERSION_SUPPLEMENTAL_RULES_TOP_3_BY_FR_TABLE]
+       [SQL_CONVERSION_SUPPLEMENTAL_RULES_EXACT_ALL_AND_OTHER_TOP_K]
   -> correct_sql_hints = correct_sql_hint_rag_service.retrieve_correct_sql_hints(kind=TOBE)
   -> correct_sql_hint_json = serialize_correct_sql_hints_for_prompt(correct_sql_hints)
   -> prompt payload:
@@ -807,8 +811,9 @@ NEXT_SQL_COMPLEX_MAP:
   FR_COL = 단일 source column 또는 AS-IS SQL pattern
   TO_TABLE = TO-BE table명
   TO_COL = 단일 TO-BE column 또는 TO-BE SQL pattern
-  SQL_CONVERSION_SUPPLEMENTAL_RULES_TOP_3_BY_FR_TABLE =
-    TARGET_TABLE별 FR_TABLE 일치 후보 안에서 FR_COL 기준 vector search top-k
+  SQL_CONVERSION_SUPPLEMENTAL_RULES_EXACT_ALL_AND_OTHER_TOP_K =
+    TARGET_TABLE과 FR_TABLE이 일치하는 룰 전체
+    + 다른 FR_TABLE 후보 중 FR_COL 기준 vector search top-k
   MAP_ID, 검색 점수, DESCRIPTION은 prompt에 전달하지 않음
 ```
 
@@ -1601,7 +1606,7 @@ fallback 제외 transient pattern:
 ### 12.4 cycle별 active model reset
 
 ```text
-Supervisor poll_node 시작
+Supervisor start_cycle_metrics(cycle) 시작
   -> reset_active_model()
 ```
 
@@ -1901,7 +1906,7 @@ get_xml_export_sqls()
 
 ## 17. 운영상 확인 포인트
 
-- `JOB_BATCH_SIZE=5`는 supervisor cycle당 registry에 담는 실행 대상 수입니다.
+- `MIGRATION_JOB_BATCH_SIZE`, `SQL_CONVERSION_JOB_BATCH_SIZE`, `SQL_TUNING_JOB_BATCH_SIZE`, `SQL_FORMATTING_JOB_BATCH_SIZE`는 supervisor cycle당 registry에 담는 agent별 실행 대상 수입니다.
 - `JOB_MAX_BATCH_COUNT`는 `NEXT_SQL_INFO.BATCH_CNT` 기반 SQL job 재처리 상한입니다.
 - SQL conversion/tuning/formatting tool 모두 `sql_inc(row_id)`를 호출하므로 `BATCH_CNT`가 증가합니다.
 - tuning agent 내부 formatting은 정상 경로입니다.

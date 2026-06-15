@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import os
 
 from langchain_core.tools import tool
 
@@ -16,7 +17,16 @@ from server.tools.context import (
 
 _WAIT_STEP = 0.2
 _PAUSE_STEP = 0.5
-_MAX_WAIT_SECONDS = 300
+
+
+def _env_int(name: str, default: int, minimum: int = 1) -> int:
+    try:
+        return max(minimum, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+_MAX_WAIT_SECONDS = _env_int("SUPERVISOR_MAX_WAIT_SECONDS", 300)
 
 
 @tool

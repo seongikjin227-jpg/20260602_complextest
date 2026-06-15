@@ -17,6 +17,7 @@ st.set_page_config(
 from pages.dashboard import render as render_dashboard
 from pages.agent_metrics import render as render_metrics
 from pages.correct_sql import render as render_correct_sql
+from pages.fail_analysis import render as render_fail_analysis
 from pages.mig_monitor import render as render_mig
 from pages.rag_manager_page import render as render_rag
 from pages.settings_page import render as render_settings
@@ -29,6 +30,7 @@ from utils.env_manager import read_env, write_env_key
 
 _MENU = {
     "📊 Dashboard": render_dashboard,
+    "🔎 Fail Analysis": render_fail_analysis,
     "🗄️ Mig Agent Monitor": render_mig,
     "🧾 SQL Agent Monitor": render_sql,
     "⚡ Tuning Agent Monitor": render_tuning,
@@ -58,7 +60,10 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("#### MENU")
-    selected = st.radio("MENU", list(_MENU.keys()), label_visibility="collapsed")
+    menu_items = list(_MENU.keys())
+    requested_page = st.query_params.get("page")
+    default_idx = menu_items.index(requested_page) if requested_page in menu_items else 0
+    selected = st.radio("MENU", menu_items, index=default_idx, label_visibility="collapsed")
 
     st.markdown("---")
     st.markdown("#### 🧭 Agent 선택")

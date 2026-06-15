@@ -7,6 +7,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from server.core.llm_fallback import reset_active_model
 from server.repositories.supervisor.metrics_repository import (
     build_metric_row,
     insert_agent_run_metrics,
@@ -59,6 +60,7 @@ def start_batch_metrics(batch_no: int) -> None:
 
 def start_cycle_metrics(cycle_no: int) -> None:
     """현재 cycle의 처리 시간 집계를 시작합니다."""
+    reset_active_model()
     cycle_metrics.clear()
     cycle_metrics.update(
         {

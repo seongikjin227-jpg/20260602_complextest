@@ -552,6 +552,7 @@ div[data-testid="stVerticalBlock"] button.chat-item {
 }
 .stat-label { font-size: 13px; color: #495057; }
 .stat-val   { font-size: 14px; font-weight: 700; color: #212529; }
+.status-row-wrap { margin-top: 4px; }
 .badge-pass { color: #10b981; }
 .badge-fail { color: #ef4444; }
 .badge-etc  { color: #6c757d; }
@@ -1026,22 +1027,31 @@ def _status_card(title: str, summary: dict, extra_html: str = ""):
         </div>""", unsafe_allow_html=True)
         return
     total = sum(normalized_summary.values())
-    rows  = ""
-    for k, v in sorted(normalized_summary.items(),
-                       key=lambda x: _STATUS_ORDER.index(x[0]) if x[0] in _STATUS_ORDER else 99):
-        icon  = _ICON.get(k, "◻️")
-        cls   = _CLR.get(k, "badge-etc")
-        rows += f"""<div class="stat-row">
-            <span class="stat-label">{icon} {k}</span>
-            <span class="stat-val {cls}">{v}</span>
-        </div>"""
     st.markdown(f"""
     <div class="stat-card">
       <div class="stat-card-title">{title} &nbsp;<span style="font-weight:400;color:#adb5bd">총 {total}건</span></div>
       {_rate_html(title, normalized_summary)}
       {extra_html}
-      {rows}
     </div>""", unsafe_allow_html=True)
+    for k, v in sorted(
+        normalized_summary.items(),
+        key=lambda x: _STATUS_ORDER.index(x[0]) if x[0] in _STATUS_ORDER else 99,
+    ):
+        icon = _ICON.get(k, "◻️")
+        cls = _CLR.get(k, "badge-etc")
+        col_label, col_val = st.columns([2.2, 1])
+        with col_label:
+            if k == "FAIL" and int(v or 0) > 0 and ("SQL" in title or "Tuning" in title):
+                agent = "SQL_CONVERSION" if "SQL" in title else "SQL_TUNING"
+                if st.button(f"{icon} FAIL {v}", key=f"status_fail_{agent}_{title}", type="secondary"):
+                    st.query_params["page"] = "🔎 Fail Analysis"
+                    st.query_params["agent"] = agent
+                    st.rerun()
+            else:
+                st.markdown(f"<span class='stat-label'>{icon} {k}</span>", unsafe_allow_html=True)
+        with col_val:
+            if not (k == "FAIL" and int(v or 0) > 0 and ("SQL" in title or "Tuning" in title)):
+                st.markdown(f"<span class='stat-val {cls}'>{v}</span>", unsafe_allow_html=True)
 
 
 def _formatting_card(summary: dict):
@@ -1219,15 +1229,6 @@ def render():
             else "메시지를 입력하세요..."
         )
         quick_prompt = None
-        if supervisor_mode:
-            q1, q2 = st.columns(2)
-            with q1:
-                if st.button("SQL Conversion Fail 종합 분석", width="stretch"):
-                    quick_prompt = "최근 SQL Conversion Fail 원인 종합 분석해줘."
-            with q2:
-                if st.button("SQL Tuning Fail 종합 분석", width="stretch"):
-                    quick_prompt = "최근 SQL Tuning Fail 원인 종합 분석해줘."
-
         user_input = st.chat_input(placeholder_text, key="chat_input")
 
     # ════════════════════════════════════════════════════════════
@@ -1252,31 +1253,11 @@ def render():
                 sql_status_summary,
                 extra_html=_length_success_html(get_sql_length_success_summary()),
             )
-            if int(sql_status_summary.get("FAIL", 0) or 0) > 0:
-                if st.button("SQL FAIL 원인 통계", width="stretch", key="right_sql_fail_analysis"):
-                    st.session_state.right_fail_analysis = "SQL_CONVERSION"
         except Exception as e:
             st.error(str(e))
         try:
             tuning_status_summary = get_tuning_status_summary()
             _status_card("⚡ Tuning", tuning_status_summary)
-            if int(tuning_status_summary.get("FAIL", 0) or 0) > 0:
-                if st.button("Tuning FAIL 원인 통계", width="stretch", key="right_tuning_fail_analysis"):
-                    st.session_state.right_fail_analysis = "SQL_TUNING"
-        except Exception as e:
-            st.error(str(e))
-        try:
-            selected_analysis = st.session_state.get("right_fail_analysis")
-            if selected_analysis == "SQL_CONVERSION":
-                _show_sql_fail_analysis_panel(
-                    "SQL_CONVERSION",
-                    get_sql_conversion_failure_analysis_rows(limit=200),
-                )
-            elif selected_analysis == "SQL_TUNING":
-                _show_sql_fail_analysis_panel(
-                    "SQL_TUNING",
-                    get_sql_tuning_failure_analysis_rows(limit=200),
-                )
         except Exception as e:
             st.error(str(e))
         try:
