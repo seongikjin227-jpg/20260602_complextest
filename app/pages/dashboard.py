@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import html
 import streamlit as st
 from collections import Counter
 from pathlib import Path
@@ -552,7 +553,32 @@ div[data-testid="stVerticalBlock"] button.chat-item {
 }
 .stat-label { font-size: 13px; color: #495057; }
 .stat-val   { font-size: 14px; font-weight: 700; color: #212529; }
-.status-row-wrap { margin-top: 4px; }
+.status-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 10px;
+}
+.status-box {
+    background: #ffffff;
+    border: 1px solid #e9ecef;
+    border-radius: 8px;
+    padding: 8px 10px;
+    min-height: 58px;
+    overflow-wrap: anywhere;
+}
+.status-box-label {
+    font-size: 11px;
+    line-height: 1.25;
+    color: #6c757d;
+    font-weight: 700;
+    margin-bottom: 5px;
+}
+.status-box-value {
+    font-size: 20px;
+    line-height: 1.1;
+    font-weight: 800;
+}
 .badge-pass { color: #10b981; }
 .badge-fail { color: #ef4444; }
 .badge-etc  { color: #6c757d; }
@@ -1027,23 +1053,31 @@ def _status_card(title: str, summary: dict, extra_html: str = ""):
         </div>""", unsafe_allow_html=True)
         return
     total = sum(normalized_summary.values())
-    st.markdown(f"""
-    <div class="stat-card">
-      <div class="stat-card-title">{title} &nbsp;<span style="font-weight:400;color:#adb5bd">총 {total}건</span></div>
-      {_rate_html(title, normalized_summary)}
-      {extra_html}
-    </div>""", unsafe_allow_html=True)
+    status_boxes = []
     for k, v in sorted(
         normalized_summary.items(),
         key=lambda x: _STATUS_ORDER.index(x[0]) if x[0] in _STATUS_ORDER else 99,
     ):
         icon = _ICON.get(k, "◻️")
         cls = _CLR.get(k, "badge-etc")
-        col_label, col_val = st.columns([2.2, 1])
-        with col_label:
-            st.markdown(f"<span class='stat-label'>{icon} {k}</span>", unsafe_allow_html=True)
-        with col_val:
-            st.markdown(f"<span class='stat-val {cls}'>{v}</span>", unsafe_allow_html=True)
+        safe_status = html.escape(str(k))
+        status_boxes.append(
+            f"""
+            <div class="status-box">
+              <div class="status-box-label">{icon} {safe_status}</div>
+              <div class="status-box-value {cls}">{v}</div>
+            </div>
+            """
+        )
+    st.markdown(f"""
+    <div class="stat-card">
+      <div class="stat-card-title">{title} &nbsp;<span style="font-weight:400;color:#adb5bd">총 {total}건</span></div>
+      {_rate_html(title, normalized_summary)}
+      {extra_html}
+      <div class="status-grid">
+        {''.join(status_boxes)}
+      </div>
+    </div>""", unsafe_allow_html=True)
 
 
 def _formatting_card(summary: dict):
@@ -1227,9 +1261,13 @@ def render():
     # 오른쪽: 에이전트 상태
     # ════════════════════════════════════════════════════════════
     with right:
-        rc, rr = st.columns([3, 1])
+        rc, ra, rr = st.columns([1.9, 0.95, 0.55])
         with rc:
             st.markdown("#### 📊 현황")
+        with ra:
+            if st.button("🔎 분석", help="Fail Analysis 바로가기"):
+                st.query_params["page"] = "🔎 Fail Analysis"
+                st.rerun()
         with rr:
             if st.button("🔄", help="새로고침"):
                 st.rerun()
