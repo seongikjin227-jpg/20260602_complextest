@@ -2,6 +2,7 @@ import os
 import re
 import json
 import html
+from urllib.parse import urlencode
 import streamlit as st
 from collections import Counter
 from pathlib import Path
@@ -579,6 +580,21 @@ div[data-testid="stVerticalBlock"] button.chat-item {
     line-height: 1.1;
     font-weight: 800;
 }
+.status-box-link,
+.status-box-link:hover,
+.status-box-link:visited {
+    color: inherit;
+    text-decoration: none;
+    display: block;
+}
+.status-box-clickable {
+    cursor: pointer;
+    transition: border-color .15s ease, box-shadow .15s ease;
+}
+.status-box-clickable:hover {
+    border-color: #fca5a5;
+    box-shadow: 0 2px 8px rgba(239, 68, 68, .14);
+}
 .badge-pass { color: #10b981; }
 .badge-fail { color: #ef4444; }
 .badge-etc  { color: #6c757d; }
@@ -1061,11 +1077,25 @@ def _status_card(title: str, summary: dict, extra_html: str = ""):
         icon = _ICON.get(k, "◻️")
         cls = _CLR.get(k, "badge-etc")
         safe_status = html.escape(str(k))
-        status_boxes.append(
+        box_html = (
             f'<div class="status-box">'
             f'<div class="status-box-label">{icon} {safe_status}</div>'
             f'<div class="status-box-value {cls}">{v}</div>'
             f'</div>'
+        )
+        if k == "FAIL" and int(v or 0) > 0 and ("SQL" in title or "Tuning" in title):
+            agent = "SQL_CONVERSION" if "SQL" in title else "SQL_TUNING"
+            query = urlencode({"page": "🔎 Fail Analysis", "agent": agent})
+            box_html = (
+                f'<a class="status-box-link" href="?{query}">'
+                f'<div class="status-box status-box-clickable">'
+                f'<div class="status-box-label">{icon} {safe_status}</div>'
+                f'<div class="status-box-value {cls}">{v}</div>'
+                f'</div>'
+                f'</a>'
+            )
+        status_boxes.append(
+            box_html
         )
     st.markdown(f"""
     <div class="stat-card">
@@ -1106,13 +1136,15 @@ def _formatting_card(summary: dict):
         </div>
       </div>
       <div class="rate-note">적용률=FORMATTED_SQL 값 있음 / TUNED_TEST PASS 계열</div>
-      <div class="stat-row">
-        <span class="stat-label">✅ 적용</span>
-        <span class="stat-val badge-pass">{applied}</span>
-      </div>
-      <div class="stat-row">
-        <span class="stat-label">⚫ 미적용</span>
-        <span class="stat-val badge-etc">{pending}</span>
+      <div class="status-grid">
+        <div class="status-box">
+          <div class="status-box-label">✅ 적용</div>
+          <div class="status-box-value badge-pass">{applied}</div>
+        </div>
+        <div class="status-box">
+          <div class="status-box-label">⚫ 미적용</div>
+          <div class="status-box-value badge-etc">{pending}</div>
+        </div>
       </div>
     </div>""", unsafe_allow_html=True)
 
