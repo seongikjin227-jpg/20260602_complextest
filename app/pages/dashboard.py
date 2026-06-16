@@ -1062,12 +1062,10 @@ def _status_card(title: str, summary: dict, extra_html: str = ""):
         cls = _CLR.get(k, "badge-etc")
         safe_status = html.escape(str(k))
         status_boxes.append(
-            f"""
-            <div class="status-box">
-              <div class="status-box-label">{icon} {safe_status}</div>
-              <div class="status-box-value {cls}">{v}</div>
-            </div>
-            """
+            f'<div class="status-box">'
+            f'<div class="status-box-label">{icon} {safe_status}</div>'
+            f'<div class="status-box-value {cls}">{v}</div>'
+            f'</div>'
         )
     st.markdown(f"""
     <div class="stat-card">
