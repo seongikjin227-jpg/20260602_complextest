@@ -1259,15 +1259,15 @@ def render():
     # 오른쪽: 에이전트 상태
     # ════════════════════════════════════════════════════════════
     with right:
-        rc, ra, rr = st.columns([1.9, 0.95, 0.55])
+        rc, ra, rr = st.columns([1.6, 0.95, 0.5], gap="small")
         with rc:
             st.markdown("#### 📊 현황")
         with ra:
-            if st.button("🔎 분석", help="Fail Analysis 바로가기"):
+            if st.button("🔎 Fail 분석", help="Fail Analysis 바로가기", width="stretch"):
                 st.query_params["page"] = "🔎 Fail Analysis"
                 st.rerun()
         with rr:
-            if st.button("🔄", help="새로고침"):
+            if st.button("🔄", help="새로고침", width="stretch"):
                 st.rerun()
 
         try:
